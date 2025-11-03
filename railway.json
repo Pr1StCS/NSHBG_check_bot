@@ -4,7 +4,8 @@
     "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "python bot.py",
+    "startCommand": "python botn.py",
     "restartPolicyType": "ON_FAILURE"
   }
+
 }
