@@ -14,6 +14,20 @@ from dotenv import load_dotenv
 import os
 import sys
 
+import os
+from yookassa import Configuration, Payment
+
+# Настройка ЮKassa
+YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
+YOOKASSA_SECRET_KEY = os.environ.get('YOOKASSA_SECRET_KEY')
+
+if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
+    Configuration.account_id = YOOKASSA_SHOP_ID
+    Configuration.secret_key = YOOKASSA_SECRET_KEY
+    print(f"✅ ЮKassa настроен (Shop ID: {YOOKASSA_SHOP_ID})")
+else:
+    print("❌ ЮKassa не настроен - проверьте переменные окружения")
+
 # Проверка что мы на Railway
 ON_RAILWAY = os.environ.get('RAILWAY_ENVIRONMENT') is not None
 
@@ -317,6 +331,79 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
     return SELECTING_EVENT
+
+    async def create_yookassa_payment(amount, description, order_id):
+    """Создание платежа в ЮKassa"""
+    try:
+        payment = Payment.create({
+            "amount": {
+                "value": f"{amount:.2f}",
+                "currency": "RUB"
+            },
+            "confirmation": {
+                "type": "redirect",
+                "return_url": "https://t.me/your_bot"
+            },
+            "capture": True,
+            "description": description,
+            "metadata": {
+                "order_id": order_id,
+                "user_id": order_id.split('_')[0]  # ID пользователя
+            }
+        })
+        
+        print(f"✅ Платеж создан: {payment.id}")
+        return payment
+        
+    except Exception as e:
+        print(f"❌ Ошибка создания платежа: {e}")
+        return None
+
+async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка платежа через ЮKassa"""
+    user_data = context.user_data
+    
+    amount = user_data['price'] * user_data['quantity']
+    description = f"Билеты: {user_data['event']} - {user_data['category']}"
+    order_id = f"{update.message.from_user.id}_{int(datetime.datetime.now().timestamp())}"
+    
+    # Создаем платеж в ЮKassa
+    payment = await create_yookassa_payment(amount, description, order_id)
+    
+    if payment and payment.confirmation.confirmation_url:
+        # Сохраняем заказ как "ожидает оплаты"
+        order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user = update.message.from_user
+        
+        with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                order_date, user.id, user.first_name, 
+                user_data['event'], user_data['category'], 
+                user_data['quantity'], amount, order_id, 
+                "pending", payment.id  # payment.id добавляем в конец
+            ])
+        
+        # Отправляем ссылку для оплаты
+        await update.message.reply_text(
+            f"💳 *Для завершения заказа необходимо оплатить:*\n\n"
+            f"💰 Сумма: {amount} руб.\n"
+            f"🎭 Мероприятие: {user_data['event']}\n"
+            f"🎟️ Категория: {user_data['category']}\n"
+            f"🔢 Количество: {user_data['quantity']}\n\n"
+            f"[💳 **ОПЛАТИТЬ {amount} РУБ.**]({payment.confirmation.confirmation_url})\n\n"
+            f"После успешной оплаты билеты будут автоматически отправлены вам.",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove(),
+            disable_web_page_preview=True
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при создании платежа. Попробуйте позже.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    return ConversationHandler.END
 
 async def select_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор мероприятия"""
