@@ -149,22 +149,30 @@ async def send_ticket_after_payment(user_id, order_id):
 def update_order_status(order_id, status):
     """Обновляет статус заказа в CSV"""
     try:
+        # Обновляем структуру файла перед работой
+        update_orders_file()
+        
         with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
             reader = csv.DictReader(file)
             orders = list(reader)
             fieldnames = reader.fieldnames
         
+        order_updated = False
         for order in orders:
             if order['ID заказа'] == order_id:
                 order['Статус'] = status
+                order_updated = True
                 break
         
-        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(orders)
-            
-        print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+        if order_updated:
+            with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
+                writer = csv.DictWriter(file, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(orders)
+                
+            print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+        else:
+            print(f"❌ Заказ {order_id} не найден для обновления")
             
     except Exception as e:
         print(f"❌ Ошибка обновления статуса: {e}")
@@ -215,11 +223,11 @@ def init_directories():
     os.makedirs('event_photos', exist_ok=True)
 
 def init_orders_file():
-    """Инициализация файла заказов"""
+    """Инициализация файла заказов с правильными колонками"""
     if not os.path.exists(ORDERS_FILE):
         with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
             writer = csv.writer(file)
-            writer.writerow(["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус"])
+            writer.writerow(["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус", "Payment ID"])
 
 def update_orders_file():
     """Обновляет структуру CSV файла если нужно"""
@@ -235,19 +243,23 @@ def update_orders_file():
             init_orders_file()
             return
             
-        if 'ID заказа' not in existing_columns or 'Статус' not in existing_columns:
+        # Проверяем наличие всех необходимых колонок
+        required_columns = ["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус", "Payment ID"]
+        
+        if not all(col in existing_columns for col in required_columns):
             print("Обновление структуры файла заказов...")
             
+            # Читаем старые заказы
             with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
                 reader = csv.DictReader(file)
                 old_orders = list(reader)
             
+            # Перезаписываем с новой структурой
             with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
                 writer = csv.writer(file)
-                writer.writerow(["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус"])
+                writer.writerow(required_columns)
                 
                 for order in old_orders:
-                    order_id = f"{order.get('ID пользователя', '0')}_{int(datetime.datetime.now().timestamp())}"
                     writer.writerow([
                         order.get('Дата', ''),
                         order.get('ID пользователя', ''),
@@ -256,15 +268,16 @@ def update_orders_file():
                         order.get('Категория', ''),
                         order.get('Количество', ''),
                         order.get('Сумма', ''),
-                        order_id,
-                        'active'
+                        order.get('ID заказа', ''),
+                        order.get('Статус', 'active'),
+                        order.get('Payment ID', 'no_payment_id')
                     ])
             print("Структура файла обновлена")
             
     except Exception as e:
         print(f"Ошибка при обновлении файла: {e}")
         init_orders_file()
-
+        
 def load_events():
     """Загружает мероприятия из JSON файла"""
     try:
@@ -527,19 +540,19 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         user = update.message.from_user
         
-        # Обновляем структуру CSV - добавляем колонку Payment ID
+        # Обязательно инициализируем файл
+        init_orders_file()
+        
         with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
             writer = csv.writer(file)
-            # Если файл пустой, добавляем заголовки
-            if os.path.getsize(ORDERS_FILE) == 0:
-                writer.writerow(["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус", "Payment ID"])
-            
             writer.writerow([
                 order_date, user.id, user.first_name, 
                 user_data['event'], user_data['category'], 
                 user_data['quantity'], amount, order_id, 
-                "pending", payment.id
+                "pending", payment.id  # Сохраняем payment_id
             ])
+        
+        print(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
         
         # Отправляем ссылку для оплаты
         await update.message.reply_text(
@@ -2206,13 +2219,16 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("=== ЗАПУСК БОТА ===")
     init_directories()
+    
+    # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ СТРУКТУРУ CSV
+    print("🔄 Обновление структуры CSV файла...")
     update_orders_file()
     
     # Загружаем мероприятия
     global EVENTS
     EVENTS = load_events()
     print(f"✅ Загружено мероприятий: {len(EVENTS)}")
-    
+   
     app = Application.builder().token(BOT_TOKEN).build()
 
     # ConversationHandler для покупки билетов
@@ -2263,4 +2279,5 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
