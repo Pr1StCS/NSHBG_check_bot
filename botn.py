@@ -828,19 +828,18 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"DEBUG: User {update.message.from_user.id} pressed: '{update.message.text}'")
-    print(f"DEBUG: Is admin: {is_admin(update.message.from_user.id)}")
     """Обработчик админ-меню"""
-    if not is_admin(update.message.from_user.id):
-        await update.message.reply_text("❌ Доступ запрещен")
+    # ШАГ 1: Проверяем права внутри функции
+    user_id = update.message.from_user.id
+    if not is_admin(user_id):
+        print(f"DEBUG: Игнорируем сообщение от не-админа {user_id}")
         return
     
+    # ШАГ 2: Получаем текст сообщения
     choice = update.message.text
-    user_id = update.message.from_user.id
-    
     print(f"DEBUG: Админ {user_id} выбрал: '{choice}'")
     
-    # Обработка кнопок главного меню
+    # ШАГ 3: Обработка кнопок главного меню
     if choice == "📊 Статистика":
         await show_stats(update, context)
         
@@ -860,7 +859,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Обработка кнопок подменю
+    # ШАГ 4: Обработка кнопок подменю
     elif choice == "➕ Добавить мероприятие":
         await add_event_start(update, context)
         
@@ -877,7 +876,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_command(update, context)
     
     else:
-        # Если текст не распознан как кнопка, обрабатываем как текст
+        # ШАГ 5: Если текст не распознан как кнопка
         await process_admin_text(update, context)
 
 async def add_ticket_to_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2233,19 +2232,20 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("=== ЗАПУСК БОТА ===")
     init_directories()
-    
-    # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ СТРУКТУРУ CSV
-    print("🔄 Обновление структуры CSV файла...")
     update_orders_file()
     
     # Загружаем мероприятия
     global EVENTS
     EVENTS = load_events()
     print(f"✅ Загружено мероприятий: {len(EVENTS)}")
-   
+    
+    # Получаем актуальный список админов
+    admin_ids = get_admin_ids()
+    print(f"✅ Админы: {admin_ids}")
+    
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler для покупки билетов
+    # ConversationHandler для покупки билетов (ДОЛЖЕН БЫТЬ ПЕРВЫМ)
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start_command)],
         states={
@@ -2269,8 +2269,11 @@ def main():
     app.add_handler(CommandHandler("events", events_command))
     app.add_handler(CommandHandler("check", check_ticket_command))
     
-    # Обработчик для админов
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_IDS) & ~filters.COMMAND, admin_handler))
+    # Обработчик для админов (УПРОЩЕННЫЙ ФИЛЬТР - проверка прав внутри функции)
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        admin_handler
+    ))
     
     # Обработчик ошибок
     app.add_error_handler(error_handler)
@@ -2293,6 +2296,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
