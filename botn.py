@@ -536,7 +536,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_summary += f"🎟️ Категория: {category}\n"
         order_summary += f"🔢 Количество: {quantity}\n"
         order_summary += f"💵 Сумма: {total} руб.\n\n"
-        order_summary += "Для завершения забора необходимо произвести оплату."
+        order_summary += "Для завершения заказа необходимо произвести оплату."
         
         keyboard = [["💳 Перейти к оплате", "❌ Отменить заказ"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
