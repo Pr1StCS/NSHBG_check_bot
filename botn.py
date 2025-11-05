@@ -23,6 +23,52 @@ import threading
 import asyncio
 from yookassa import Payment
 
+def get_admin_ids():
+    """
+    Безопасно получает список ADMIN_IDS из переменных окружения
+    Возвращает список целых чисел
+    """
+    try:
+        # Получаем строку из переменных окружения (из Railway)
+        admin_ids_str = os.environ.get('ADMIN_IDS', '')
+        
+        # Если в Railway не установлено, используем дефолтные значения
+        if not admin_ids_str:
+            admin_ids_str = '5080055389'  # ваши текущие админы
+            print("⚠️ ADMIN_IDS не найдены в переменных окружения, использую дефолтные")
+        
+        # Преобразуем строку в список целых чисел
+        admin_ids = []
+        for id_str in admin_ids_str.split(','):
+            id_str_clean = id_str.strip()
+            if id_str_clean:  # проверяем что строка не пустая
+                try:
+                    admin_ids.append(int(id_str_clean))
+                except ValueError:
+                    print(f"⚠️ Некорректный ID админа: {id_str_clean}")
+        
+        print(f"✅ Загружено ADMIN_IDS: {admin_ids}")
+        return admin_ids
+        
+    except Exception as e:
+        print(f"❌ Ошибка при загрузке ADMIN_IDS: {e}")
+        # Возвращаем дефолтные значения в случае ошибки
+        return [5080055389, 400097852]
+
+def is_admin(user_id):
+    """
+    Проверяет, является ли пользователь администратором
+    """
+    try:
+        admin_ids = get_admin_ids()
+        return user_id in admin_ids
+    except Exception as e:
+        print(f"❌ Ошибка при проверке прав админа: {e}")
+        return False
+
+# Инициализируем ADMIN_IDS при запуске
+ADMIN_IDS = get_admin_ids()
+
 async def check_pending_payments():
     """Периодически проверяет статус pending платежей"""
     while True:
@@ -427,13 +473,6 @@ async def generate_qr_code(order_id: str):
     img.save(bio, 'PNG')
     bio.seek(0)
     return bio
-
-def is_admin(user_id):
-    """Проверяет, является ли пользователь администратором"""
-    try:
-        return user_id in ADMIN_IDS
-    except (ValueError, TypeError):
-        return False
 
 # ===== ОСНОВНЫЕ КОМАНДЫ =====
 
@@ -2276,6 +2315,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
