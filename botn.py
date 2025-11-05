@@ -19,67 +19,74 @@ from yookassa import Configuration, Payment
 
 import asyncio
 import threading
-from flask import Flask, request, jsonify
-from yookassa.domain.notification import WebhookNotification
 
-# Создаем Flask приложение для вебхуков
-webhook_app = Flask(__name__)
+import asyncio
+from yookassa import Payment
 
-@webhook_app.route('/webhook/yookassa', methods=['POST'])
-def yookassa_webhook():
-    """Вебхук для уведомлений от ЮKassa"""
-    try:
-        # Получаем и проверяем подпись
-        event_json = request.json
-        print(f"🔔 WEBHOOK: Получено уведомление: {event_json}")
-        
-        # Создаем объект уведомления
-        notification = WebhookNotification(event_json)
-        
-        if notification.event == 'payment.succeeded':
-            payment = notification.object
-            order_id = payment.metadata.get('order_id')
-            user_id = payment.metadata.get('user_id')
+async def check_pending_payments():
+    """Периодически проверяет статус pending платежей"""
+    while True:
+        try:
+            # Ждем 30 секунд между проверками
+            await asyncio.sleep(30)
             
-            print(f"✅ Платеж успешен! Order: {order_id}, User: {user_id}")
+            print("🔍 Проверка pending платежей...")
             
-            # Обновляем статус заказа
-            update_order_status(order_id, "active")
+            # Ищем заказы со статусом pending
+            with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+                reader = csv.DictReader(file)
+                pending_orders = [order for order in reader if order['Статус'] == 'pending']
             
-            # Запускаем асинхронную отправку билета
-            asyncio.run_coroutine_threadsafe(
-                send_ticket_after_payment(int(user_id), order_id),
-                asyncio.get_event_loop()
-            )
-        
-        return jsonify({"status": "success"}), 200
-        
-    except Exception as e:
-        print(f"❌ WEBHOOK ERROR: {e}")
-        return jsonify({"status": "error"}), 500
+            for order in pending_orders:
+                payment_id = order.get('Payment ID', '')
+                if payment_id and payment_id != "no_payment_id":
+                    try:
+                        # Проверяем статус платежа в ЮKassa
+                        payment = Payment.find_one(payment_id)
+                        
+                        if payment.status == 'succeeded':
+                            print(f"✅ Платеж подтвержден: {payment_id}")
+                            # Обновляем статус заказа
+                            update_order_status(order['ID заказа'], "active")
+                            # Отправляем билет
+                            await send_ticket_after_payment(int(order['ID пользователя']), order['ID заказа'])
+                            
+                        elif payment.status in ['canceled', 'failed']:
+                            print(f"❌ Платеж отменен: {payment_id}")
+                            update_order_status(order['ID заказа'], "canceled")
+                            
+                    except Exception as e:
+                        print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+                        
+        except Exception as e:
+            print(f"❌ Ошибка в check_pending_payments: {e}")
 
-def update_order_status(order_id, status):
-    """Обновляет статус заказа в CSV"""
-    try:
-        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-            fieldnames = reader.fieldnames
+async def check_single_payment(payment_id, order_id, user_id):
+    """Проверяет статус конкретного платежа"""
+    max_checks = 60  # Проверяем 60 раз (30 минут)
+    
+    for i in range(max_checks):
+        await asyncio.sleep(30)  # Ждем 30 секунд
         
-        for order in orders:
-            if order['ID заказа'] == order_id:
-                order['Статус'] = status
+        try:
+            payment = Payment.find_one(payment_id)
+            
+            if payment.status == 'succeeded':
+                print(f"✅ Платеж подтвержден: {payment_id}")
+                update_order_status(order_id, "active")
+                await send_ticket_after_payment(user_id, order_id)
                 break
-        
-        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(orders)
-            
-        print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
-            
-    except Exception as e:
-        print(f"❌ Ошибка обновления статуса: {e}")
+                
+            elif payment.status in ['canceled', 'failed']:
+                print(f"❌ Платеж отменен: {payment_id}")
+                update_order_status(order_id, "canceled")
+                break
+                
+            elif payment.status == 'pending':
+                print(f"⏳ Платеж еще в процессе: {payment_id} (проверка {i+1}/{max_checks})")
+                
+        except Exception as e:
+            print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
 
 async def send_ticket_after_payment(user_id, order_id):
     """Отправляет билет пользователю после успешной оплаты"""
@@ -119,8 +126,9 @@ async def send_ticket_after_payment(user_id, order_id):
         ticket_message += "📱 *Сохраните этот QR-код!* Он потребуется для входа на мероприятие."
         
         # Отправляем билет пользователю
+        app = Application.builder().token(BOT_TOKEN).build()
         if qr_code:
-            await application.bot.send_photo(
+            await app.bot.send_photo(
                 chat_id=user_id,
                 photo=qr_code,
                 caption=ticket_message,
@@ -128,7 +136,7 @@ async def send_ticket_after_payment(user_id, order_id):
             )
             print(f"✅ Билет отправлен пользователю {user_id}")
         else:
-            await application.bot.send_message(
+            await app.bot.send_message(
                 chat_id=user_id,
                 text=f"✅ Оплата прошла успешно! Ваш ID билета: {order_id}",
                 parse_mode='Markdown'
@@ -138,13 +146,28 @@ async def send_ticket_after_payment(user_id, order_id):
     except Exception as e:
         print(f"❌ Ошибка отправки билета: {e}")
 
-def run_webhook_server():
-    """Запускает сервер для вебхуков"""
-    print("🌐 Запуск вебхук сервера на порту 5000...")
-    webhook_app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
-
-# Глобальная переменная для application
-application = None
+def update_order_status(order_id, status):
+    """Обновляет статус заказа в CSV"""
+    try:
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+            fieldnames = reader.fieldnames
+        
+        for order in orders:
+            if order['ID заказа'] == order_id:
+                order['Статус'] = status
+                break
+        
+        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(orders)
+            
+        print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+            
+    except Exception as e:
+        print(f"❌ Ошибка обновления статуса: {e}")
 
 # Настройка ЮKassa
 YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
@@ -500,17 +523,22 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment = await create_yookassa_payment(amount, description, order_id)
     
     if payment and payment.confirmation.confirmation_url:
-        # Сохраняем заказ как "ожидает оплаты"
+        # Сохраняем заказ как "ожидает оплаты" с payment_id
         order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         user = update.message.from_user
         
+        # Обновляем структуру CSV - добавляем колонку Payment ID
         with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
             writer = csv.writer(file)
+            # Если файл пустой, добавляем заголовки
+            if os.path.getsize(ORDERS_FILE) == 0:
+                writer.writerow(["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус", "Payment ID"])
+            
             writer.writerow([
                 order_date, user.id, user.first_name, 
                 user_data['event'], user_data['category'], 
                 user_data['quantity'], amount, order_id, 
-                "pending", payment.id  # payment.id добавляем в конец
+                "pending", payment.id
             ])
         
         # Отправляем ссылку для оплаты
@@ -521,11 +549,15 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎟️ Категория: {user_data['category']}\n"
             f"🔢 Количество: {user_data['quantity']}\n\n"
             f"[💳 **ОПЛАТИТЬ {amount} РУБ.**]({payment.confirmation.confirmation_url})\n\n"
-            f"После успешной оплаты билеты будут автоматически отправлены вам.",
+            f"✅ После оплаты билет придет автоматически в течение 1-2 минут.",
             parse_mode='Markdown',
             reply_markup=ReplyKeyboardRemove(),
             disable_web_page_preview=True
         )
+        
+        # Запускаем проверку статуса этого платежа
+        asyncio.create_task(check_single_payment(payment.id, order_id, user.id))
+        
     else:
         await update.message.reply_text(
             "❌ Ошибка при создании платежа. Попробуйте позже.",
@@ -533,6 +565,33 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     return ConversationHandler.END
+
+async def check_single_payment(payment_id, order_id, user_id):
+    """Проверяет статус конкретного платежа"""
+    max_checks = 60  # Проверяем 60 раз (30 минут)
+    
+    for i in range(max_checks):
+        await asyncio.sleep(30)  # Ждем 30 секунд
+        
+        try:
+            payment = Payment.find_one(payment_id)
+            
+            if payment.status == 'succeeded':
+                print(f"✅ Платеж подтвержден: {payment_id}")
+                update_order_status(order_id, "active")
+                await send_ticket_after_payment(user_id, order_id)
+                break
+                
+            elif payment.status in ['canceled', 'failed']:
+                print(f"❌ Платеж отменен: {payment_id}")
+                update_order_status(order_id, "canceled")
+                break
+                
+            elif payment.status == 'pending':
+                print(f"⏳ Платеж еще в процессе: {payment_id} (проверка {i+1}/{max_checks})")
+                
+        except Exception as e:
+            print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
 
 async def select_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор мероприятия"""
@@ -2154,9 +2213,7 @@ def main():
     EVENTS = load_events()
     print(f"✅ Загружено мероприятий: {len(EVENTS)}")
     
-    # Создаем приложение
-    global application
-    application = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
 
     # ConversationHandler для покупки билетов
     conv_handler = ConversationHandler(
@@ -2170,22 +2227,29 @@ def main():
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
-    application.add_handler(conv_handler)
+    app.add_handler(conv_handler)
     
-    # Остальные обработчики...
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("id", get_id))
-    application.add_handler(CommandHandler("events", events_command))
-    application.add_handler(CommandHandler("check", check_ticket_command))
-    application.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_IDS) & ~filters.COMMAND, admin_handler))
+    # Обработчик для фото
+    app.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_upload))
     
-    # Запускаем вебхук сервер в отдельном потоке
-    webhook_thread = threading.Thread(target=run_webhook_server, daemon=True)
-    webhook_thread.start()
+    # Команды
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("id", get_id))
+    app.add_handler(CommandHandler("events", events_command))
+    app.add_handler(CommandHandler("check", check_ticket_command))
+    
+    # Обработчик для админов
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_IDS) & ~filters.COMMAND, admin_handler))
+    
+    # Обработчик ошибок
+    app.add_error_handler(error_handler)
+    
+    # Запускаем фоновую проверку pending платежей
+    asyncio.get_event_loop().create_task(check_pending_payments())
     
     print("=== БОТ ЗАПУЩЕН ===")
-    application.run_polling()
+    app.run_polling()
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
@@ -2199,3 +2263,4 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
