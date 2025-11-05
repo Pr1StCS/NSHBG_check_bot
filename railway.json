@@ -5,7 +5,9 @@
   },
   "deploy": {
     "startCommand": "python botn.py",
-    "restartPolicyType": "ON_FAILURE"
+    "restartPolicyType": "ON_FAILURE",
+    "ports": [
+      {"port": 5000, "protocol": "TCP"}
+    ]
   }
-
 }
