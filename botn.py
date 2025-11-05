@@ -431,7 +431,7 @@ async def generate_qr_code(order_id: str):
 def is_admin(user_id):
     """Проверяет, является ли пользователь администратором"""
     try:
-        return user_id in [int(id) for id in ADMIN_IDS]
+        return user_id in ADMIN_IDS
     except (ValueError, TypeError):
         return False
 
@@ -2276,6 +2276,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
