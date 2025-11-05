@@ -254,7 +254,7 @@ async def generate_qr_code(order_id: str):
         border=4,
     )
     
-    bot_username = "fakel_ticket_bot"
+    bot_username = "NSHBG_NCH_Ticket_bot"
     qr_data = f"https://t.me/{bot_username}?start=check_{order_id}"
     
     qr.add_data(qr_data)
@@ -519,50 +519,34 @@ async def select_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SELECTING_QUANTITY
 
 async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение заказа"""
+    """Подтверждение заказа с переходом к оплате"""
     choice = update.message.text
     
     if choice == "✅ Подтвердить":
+        # Сохраняем данные заказа
         event_name = context.user_data['event']
         category = context.user_data['category']
         quantity = context.user_data['quantity']
         price = context.user_data['price']
         total = price * quantity
         
-        user = update.message.from_user
-        order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        order_id = f"{user.id}_{int(datetime.datetime.now().timestamp())}"
-
-        try:
-            with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
-                writer = csv.writer(file)
-                writer.writerow([order_date, user.id, user.first_name, event_name, category, quantity, total, order_id, "active"])
-            
-            event_data = EVENTS[event_name]
-            
-            qr_code = await generate_qr_code(order_id)
-            
-            order_details = "🎉 Заказ подтвержден!\n\n"
-            order_details += "📋 Детали:\n"
-            order_details += f"🎭 Мероприятие: {event_name}\n"
-            order_details += f"📅 Дата: {event_data['date']}\n"
-            order_details += f"📍 Место: {event_data['location']}\n"
-            order_details += f"🎟️ Категория: {category}\n"
-            order_details += f"🔢 Количество: {quantity}\n"
-            order_details += f"💵 Сумма: {total} руб.\n"
-            order_details += f"🆔 ID заказа: {order_id}\n\n"
-            order_details += "📱 Сохраните этот QR-код! Он понадобится для входа на мероприятие."
-            
-            await update.message.reply_photo(
-                photo=qr_code,
-                caption=order_details,
-                reply_markup=ReplyKeyboardRemove()
-            )
-            
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при сохранении заказа: {e}")
+        # Показываем итоги и переходим к оплате
+        order_summary = "📋 *Ваш заказ:*\n"
+        order_summary += f"🎭 Мероприятие: {event_name}\n"
+        order_summary += f"🎟️ Категория: {category}\n"
+        order_summary += f"🔢 Количество: {quantity}\n"
+        order_summary += f"💵 Сумма: {total} руб.\n\n"
+        order_summary += "Для завершения забора необходимо произвести оплату."
         
-        return ConversationHandler.END
+        keyboard = [["💳 Перейти к оплате", "❌ Отменить заказ"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            order_summary,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return "PAYMENT"  # Переходим к состоянию оплаты
         
     elif choice == "❌ Отменить":
         await update.message.reply_text(
@@ -570,10 +554,20 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
-    
+
+async def process_payment_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка шага оплаты"""
+    if update.message.text == "💳 Перейти к оплате":
+        return await process_payment(update, context)
+    elif update.message.text == "❌ Отменить заказ":
+        await update.message.reply_text(
+            "Заказ отменен.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
     else:
         await update.message.reply_text("Пожалуйста, выберите вариант из кнопок:")
-        return CONFIRMING
+        return "PAYMENT"
 
 # ===== АДМИН-ПАНЕЛЬ =====
 
@@ -2035,15 +2029,16 @@ def main():
 
     # ConversationHandler для покупки билетов
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start_command)],
-        states={
-            SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
-            SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
-            SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
-            CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+    entry_points=[CommandHandler('start', start_command)],
+    states={
+        SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
+        SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+        SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
+        CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
+        "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],  # ← Добавлено
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
     app.add_handler(conv_handler)
     
     # Обработчик для фото
@@ -2075,5 +2070,4 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 if __name__ == '__main__':
-
     main()
