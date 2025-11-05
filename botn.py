@@ -816,9 +816,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         ["📊 Статистика", "🎭 Управление мероприятиями"],
-        ["📈 Отчеты", "🔍 Проверить билет", "🔙 Выход"]
+        ["📈 Отчеты", "🔍 Проверить билет"],
+        ["🔙 Выход"]
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     await update.message.reply_text(
         "⚙️ *Админ-панель*\n\nВыберите действие:",
@@ -827,81 +828,57 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: User {update.message.from_user.id} pressed: '{update.message.text}'")
+    print(f"DEBUG: Is admin: {is_admin(update.message.from_user.id)}")
     """Обработчик админ-меню"""
     if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
         return
     
     choice = update.message.text
+    user_id = update.message.from_user.id
     
-    print(f"DEBUG admin_handler: Обработка '{choice}'")
+    print(f"DEBUG: Админ {user_id} выбрал: '{choice}'")
     
-    admin_buttons = [
-        "📊 Статистика", "🎭 Управление мероприятиями", "📈 Отчеты", 
-        "🔍 Проверить билет", "🔙 Выход",
-        "➕ Добавить мероприятие", "❌ Удалить мероприятие", 
-        "✏️ Редактировать билеты", "🔙 Назад",
-        "➕ Добавить билет", "✏️ Изменить цену", "❌ Удалить билет",
-        "✅ Да, удалить", "❌ Нет, отменить",
-        "🎯 Управление ценами", "➕ Добавить правило", "✏️ Изменить правило", "❌ Удалить правило",
-        "🖼️ Управление фото"
-    ]
+    # Обработка кнопок главного меню
+    if choice == "📊 Статистика":
+        await show_stats(update, context)
+        
+    elif choice == "🎭 Управление мероприятиями":
+        await manage_events_menu(update, context)
+        
+    elif choice == "📈 Отчеты":
+        await generate_reports(update, context)
+        
+    elif choice == "🔍 Проверить билет":
+        await check_ticket_command(update, context)
+        
+    elif choice == "🔙 Выход":
+        await update.message.reply_text(
+            "Выход из админ-панели",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
     
-    if choice in admin_buttons:
-        if choice == "📊 Статистика":
-            await show_stats(update, context)
-        elif choice == "🎭 Управление мероприятиями":
-            await manage_events_menu(update, context)
-        elif choice == "📈 Отчеты":
-            await generate_reports(update, context)
-        elif choice == "🔍 Проверить билет":
-            await check_ticket_command(update, context)
-        elif choice == "🔙 Выход":
-            await update.message.reply_text(
-                "Выход из админ-панели",
-                reply_markup=ReplyKeyboardRemove()
-            )
-        elif choice == "➕ Добавить мероприятие":
-            await add_event_start(update, context)
-        elif choice == "❌ Удалить мероприятие":
-            await delete_event_start(update, context)
-        elif choice == "✏️ Редактировать билеты":
-            await edit_tickets_start(update, context)
-        elif choice == "🔙 Назад":
-            await admin_command(update, context)
-        elif choice == "➕ Добавить билет":
-            await add_ticket_to_event(update, context)
-        elif choice == "✏️ Изменить цену":
-            await change_ticket_price(update, context)
-        elif choice == "❌ Удалить билет":
-            await delete_ticket_from_event(update, context)
-        elif choice == "✅ Да, удалить":
-            if context.user_data.get('action') == 'confirm_delete':
-                event_name = context.user_data.get('event_to_delete')
-                if event_name and event_name in EVENTS:
-                    event_data = EVENTS[event_name]
-                    del EVENTS[event_name]
-                    if save_events(EVENTS):
-                        await update.message.reply_text(f"✅ Мероприятие '{event_name}' удалено!")
-                    context.user_data.clear()
-                    await admin_command(update, context)
-        elif choice == "❌ Нет, отменить":
-            if context.user_data.get('action') == 'confirm_delete':
-                await update.message.reply_text("❌ Удаление отменено")
-                context.user_data.clear()
-                await admin_command(update, context)
-        elif choice == "🎯 Управление ценами":
-            await manage_pricing_rules(update, context)
-        elif choice == "➕ Добавить правило":
-            await add_pricing_rule_start(update, context)
-        elif choice == "✏️ Изменить правило":
-            await edit_pricing_rule_start(update, context)
-        elif choice == "❌ Удалить правило":
-            await delete_pricing_rule_start(update, context)
-        elif choice == "🖼️ Управление фото":
-            await manage_photos_start(update, context)
+    # Обработка кнопок подменю
+    elif choice == "➕ Добавить мероприятие":
+        await add_event_start(update, context)
+        
+    elif choice == "❌ Удалить мероприятие":
+        await delete_event_start(update, context)
+        
+    elif choice == "✏️ Редактировать билеты":
+        await edit_tickets_start(update, context)
+        
+    elif choice == "🖼️ Управление фото":
+        await manage_photos_start(update, context)
+        
+    elif choice == "🔙 Назад":
+        await admin_command(update, context)
     
     else:
-        return await process_admin_text(update, context)
+        # Если текст не распознан как кнопка, обрабатываем как текст
+        await process_admin_text(update, context)
 
 async def add_ticket_to_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Добавление билета к мероприятию"""
@@ -1217,8 +1194,9 @@ async def manage_events_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     events_list = "\n".join([f"• {event}" for event in EVENTS.keys()]) if EVENTS else "• Нет мероприятий"
     
     await update.message.reply_text(
-        f"🎭 Управление мероприятиями\n\nТекущие мероприятия:\n{events_list}\n\nВыберите действие:",
-        reply_markup=reply_markup
+        f"🎭 *Управление мероприятиями*\n\nТекущие мероприятия:\n{events_list}\n\nВыберите действие:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 async def manage_photos_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2315,6 +2293,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
