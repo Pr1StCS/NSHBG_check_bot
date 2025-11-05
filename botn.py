@@ -332,7 +332,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SELECTING_EVENT
 
-    async def create_yookassa_payment(amount, description, order_id):
+async def create_yookassa_payment(amount, description, order_id):
     """Создание платежа в ЮKassa"""
     try:
         payment = Payment.create({
@@ -2075,4 +2075,5 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 if __name__ == '__main__':
+
     main()
