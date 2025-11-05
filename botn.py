@@ -17,6 +17,135 @@ import sys
 import os
 from yookassa import Configuration, Payment
 
+import asyncio
+import threading
+from flask import Flask, request, jsonify
+from yookassa.domain.notification import WebhookNotification
+
+# Создаем Flask приложение для вебхуков
+webhook_app = Flask(__name__)
+
+@webhook_app.route('/webhook/yookassa', methods=['POST'])
+def yookassa_webhook():
+    """Вебхук для уведомлений от ЮKassa"""
+    try:
+        # Получаем и проверяем подпись
+        event_json = request.json
+        print(f"🔔 WEBHOOK: Получено уведомление: {event_json}")
+        
+        # Создаем объект уведомления
+        notification = WebhookNotification(event_json)
+        
+        if notification.event == 'payment.succeeded':
+            payment = notification.object
+            order_id = payment.metadata.get('order_id')
+            user_id = payment.metadata.get('user_id')
+            
+            print(f"✅ Платеж успешен! Order: {order_id}, User: {user_id}")
+            
+            # Обновляем статус заказа
+            update_order_status(order_id, "active")
+            
+            # Запускаем асинхронную отправку билета
+            asyncio.run_coroutine_threadsafe(
+                send_ticket_after_payment(int(user_id), order_id),
+                asyncio.get_event_loop()
+            )
+        
+        return jsonify({"status": "success"}), 200
+        
+    except Exception as e:
+        print(f"❌ WEBHOOK ERROR: {e}")
+        return jsonify({"status": "error"}), 500
+
+def update_order_status(order_id, status):
+    """Обновляет статус заказа в CSV"""
+    try:
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+            fieldnames = reader.fieldnames
+        
+        for order in orders:
+            if order['ID заказа'] == order_id:
+                order['Статус'] = status
+                break
+        
+        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(orders)
+            
+        print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+            
+    except Exception as e:
+        print(f"❌ Ошибка обновления статуса: {e}")
+
+async def send_ticket_after_payment(user_id, order_id):
+    """Отправляет билет пользователю после успешной оплаты"""
+    try:
+        print(f"🚀 Отправка билета пользователю {user_id}, заказ {order_id}")
+        
+        # Находим информацию о заказе
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            for order in reader:
+                if order['ID заказа'] == order_id:
+                    order_info = order
+                    break
+            else:
+                print(f"❌ Заказ {order_id} не найден")
+                return
+        
+        # Генерируем QR-код
+        qr_code = await generate_qr_code(order_id)
+        
+        # Формируем сообщение с билетом
+        event_name = order_info['Мероприятие']
+        event_data = EVENTS.get(event_name, {})
+        
+        ticket_message = "🎉 *Оплата прошла успешно!*\n\n"
+        ticket_message += "📋 *Ваш электронный билет:*\n"
+        ticket_message += f"🎭 Мероприятие: {event_name}\n"
+        
+        if event_data:
+            ticket_message += f"📅 Дата: {event_data.get('date', 'Не указано')}\n"
+            ticket_message += f"📍 Место: {event_data.get('location', 'Не указано')}\n"
+        
+        ticket_message += f"🎟️ Категория: {order_info['Категория']}\n"
+        ticket_message += f"🔢 Количество: {order_info['Количество']} шт.\n"
+        ticket_message += f"💵 Сумма: {order_info['Сумма']} руб.\n"
+        ticket_message += f"🆔 ID заказа: {order_id}\n\n"
+        ticket_message += "📱 *Сохраните этот QR-код!* Он потребуется для входа на мероприятие."
+        
+        # Отправляем билет пользователю
+        if qr_code:
+            await application.bot.send_photo(
+                chat_id=user_id,
+                photo=qr_code,
+                caption=ticket_message,
+                parse_mode='Markdown'
+            )
+            print(f"✅ Билет отправлен пользователю {user_id}")
+        else:
+            await application.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ Оплата прошла успешно! Ваш ID билета: {order_id}",
+                parse_mode='Markdown'
+            )
+            print(f"✅ Сообщение отправлено пользователю {user_id} (без QR-кода)")
+            
+    except Exception as e:
+        print(f"❌ Ошибка отправки билета: {e}")
+
+def run_webhook_server():
+    """Запускает сервер для вебхуков"""
+    print("🌐 Запуск вебхук сервера на порту 5000...")
+    webhook_app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+# Глобальная переменная для application
+application = None
+
 # Настройка ЮKassa
 YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
 YOOKASSA_SECRET_KEY = os.environ.get('YOOKASSA_SECRET_KEY')
@@ -2025,40 +2154,38 @@ def main():
     EVENTS = load_events()
     print(f"✅ Загружено мероприятий: {len(EVENTS)}")
     
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Создаем приложение
+    global application
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # ConversationHandler для покупки билетов
     conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('start', start_command)],
-    states={
-        SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
-        SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
-        SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
-        CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
-        "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],  # ← Добавлено
-    },
-    fallbacks=[CommandHandler('cancel', cancel)]
-)
-    app.add_handler(conv_handler)
+        entry_points=[CommandHandler('start', start_command)],
+        states={
+            SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
+            SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+            SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
+            CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
+            "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    application.add_handler(conv_handler)
     
-    # Обработчик для фото
-    app.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_upload))
+    # Остальные обработчики...
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("id", get_id))
+    application.add_handler(CommandHandler("events", events_command))
+    application.add_handler(CommandHandler("check", check_ticket_command))
+    application.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_IDS) & ~filters.COMMAND, admin_handler))
     
-    # Команды
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("id", get_id))
-    app.add_handler(CommandHandler("events", events_command))
-    app.add_handler(CommandHandler("check", check_ticket_command))
-    
-    # Обработчик для админов
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(ADMIN_IDS) & ~filters.COMMAND, admin_handler))
-    
-    # Обработчик ошибок
-    app.add_error_handler(error_handler)
+    # Запускаем вебхук сервер в отдельном потоке
+    webhook_thread = threading.Thread(target=run_webhook_server, daemon=True)
+    webhook_thread.start()
     
     print("=== БОТ ЗАПУЩЕН ===")
-    app.run_polling()
+    application.run_polling()
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
@@ -2070,4 +2197,5 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 if __name__ == '__main__':
+
     main()
