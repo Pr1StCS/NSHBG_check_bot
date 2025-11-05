@@ -445,6 +445,7 @@ async def save_event_photo(photo_file, event_name):
         filename = f"{safe_event_name}_{timestamp}.{file_extension}"
         filepath = os.path.join(PHOTOS_DIR, filename)
         
+        print(f"DEBUG: Сохранение фото в: {filepath}")
         await photo_file.download_to_drive(filepath)
         
         print(f"✅ Фото сохранено: {filepath}")
@@ -1264,51 +1265,83 @@ async def upload_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Сначала выберите мероприятие")
         return await manage_photos_start(update, context)
     
+    event_name = context.user_data['editing_event']
+    print(f"DEBUG: Начало загрузки фото для {event_name}")
+    
     await update.message.reply_text(
-        "📤 Пришлите фото для мероприятия (в виде изображения, не файлом):",
+        f"📤 Пришлите фото для мероприятия '{event_name}' (в виде изображения, не файлом):",
         reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
     )
     
     context.user_data['action'] = 'uploading_photo'
+    print(f"DEBUG: Установлен action: uploading_photo")
 
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженного фото"""
-    print(f"DEBUG: Получено фото, action: {context.user_data.get('action')}")
+    print(f"DEBUG: Получено фото, user_id: {update.message.from_user.id}")
+    
+    # Проверяем права админа внутри функции
+    if not is_admin(update.message.from_user.id):
+        print(f"DEBUG: Фото от не-админа {update.message.from_user.id} - игнорируем")
+        return
+    
+    # Проверяем что мы в режиме загрузки фото
+    if context.user_data.get('action') != 'uploading_photo':
+        print(f"DEBUG: Фото получено, но action не uploading_photo: {context.user_data.get('action')}")
+        await update.message.reply_text("❌ Сначала выберите 'Загрузить новое фото' в меню управления фото")
+        return
     
     if 'editing_event' not in context.user_data:
+        print("DEBUG: Нет editing_event в user_data")
         await update.message.reply_text("❌ Ошибка: мероприятие не выбрано")
         return await manage_photos_start(update, context)
     
     event_name = context.user_data['editing_event']
     event_data = EVENTS[event_name]
     
-    photo_file = await update.message.photo[-1].get_file()
+    print(f"DEBUG: Загрузка фото для мероприятия: {event_name}")
     
-    new_photo_path = await save_event_photo(photo_file, event_name)
-    
-    if not new_photo_path:
-        await update.message.reply_text("❌ Ошибка при сохранении фото")
-        return await show_event_photo_menu(update, context)
-    
-    if event_data.get('photo') and os.path.exists(event_data['photo']):
-        try:
-            os.remove(event_data['photo'])
-        except Exception as e:
-            print(f"Ошибка удаления старого фото: {e}")
-    
-    event_data['photo'] = new_photo_path
-    
-    if save_events(EVENTS):
-        with open(new_photo_path, 'rb') as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=f"✅ Фото для мероприятия '{event_name}' успешно обновлено!",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-    else:
-        await update.message.reply_text("❌ Ошибка при сохранении данных мероприятия")
-    
-    context.user_data['action'] = 'event_photo_menu'
+    try:
+        # Получаем файл фото
+        photo_file = await update.message.photo[-1].get_file()
+        print(f"DEBUG: Получен файл фото: {photo_file.file_path}")
+        
+        # Сохраняем фото
+        new_photo_path = await save_event_photo(photo_file, event_name)
+        
+        if not new_photo_path:
+            await update.message.reply_text("❌ Ошибка при сохранении фото")
+            return await show_event_photo_menu(update, context)
+        
+        # Удаляем старое фото если есть
+        if event_data.get('photo') and os.path.exists(event_data['photo']):
+            try:
+                os.remove(event_data['photo'])
+                print(f"DEBUG: Удалено старое фото: {event_data['photo']}")
+            except Exception as e:
+                print(f"DEBUG: Ошибка удаления старого фото: {e}")
+        
+        # Обновляем данные мероприятия
+        event_data['photo'] = new_photo_path
+        
+        if save_events(EVENTS):
+            # Показываем новое фото
+            with open(new_photo_path, 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=f"✅ Фото для мероприятия '{event_name}' успешно обновлено!",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+            print(f"DEBUG: Фото успешно обновлено для {event_name}")
+        else:
+            await update.message.reply_text("❌ Ошибка при сохранении данных мероприятия")
+        
+        # Возвращаем в меню управления фото
+        context.user_data['action'] = 'event_photo_menu'
+        
+    except Exception as e:
+        print(f"❌ Ошибка загрузки фото: {e}")
+        await update.message.reply_text("❌ Ошибка при загрузке фото")
 
 async def delete_event_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Удаление фото мероприятия"""
@@ -2259,8 +2292,11 @@ def main():
     )
     app.add_handler(conv_handler)
     
-    # Обработчик для фото
-    app.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_upload))
+    # Обработчик для фото (УПРОЩЕННЫЙ - без фильтра админов)
+    app.add_handler(MessageHandler(
+        filters.PHOTO,  # ТОЛЬКО фильтр по фото
+        handle_photo_upload
+    ))
     
     # Команды
     app.add_handler(CommandHandler("admin", admin_command))
@@ -2269,7 +2305,7 @@ def main():
     app.add_handler(CommandHandler("events", events_command))
     app.add_handler(CommandHandler("check", check_ticket_command))
     
-    # Обработчик для админов (УПРОЩЕННЫЙ ФИЛЬТР - проверка прав внутри функции)
+    # Обработчик для админов (УПРОЩЕННЫЙ ФИЛЬТР)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         admin_handler
@@ -2296,6 +2332,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
