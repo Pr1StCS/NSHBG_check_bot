@@ -107,23 +107,22 @@ async def send_ticket_after_payment(user_id, order_id):
         # Генерируем QR-код
         qr_code = await generate_qr_code(order_id)
         
-        # Формируем сообщение с билетом
+        # Простое сообщение без форматирования
         event_name = order_info['Мероприятие']
         event_data = EVENTS.get(event_name, {})
         
-        ticket_message = "🎉 *Оплата прошла успешно!*\n\n"
-        ticket_message += "📋 *Ваш электронный билет:*\n"
-        ticket_message += f"🎭 Мероприятие: {event_name}\n"
-        
-        if event_data:
-            ticket_message += f"📅 Дата: {event_data.get('date', 'Не указано')}\n"
-            ticket_message += f"📍 Место: {event_data.get('location', 'Не указано')}\n"
-        
-        ticket_message += f"🎟️ Категория: {order_info['Категория']}\n"
-        ticket_message += f"🔢 Количество: {order_info['Количество']} шт.\n"
-        ticket_message += f"💵 Сумма: {order_info['Сумма']} руб.\n"
-        ticket_message += f"🆔 ID заказа: {order_id}\n\n"
-        ticket_message += "📱 *Сохраните этот QR-код!* Он потребуется для входа на мероприятие."
+        ticket_message = f"""🎉 Оплата прошла успешно!
+
+📋 Ваш электронный билет:
+🎭 Мероприятие: {event_name}
+📅 Дата: {event_data.get('date', 'Не указано')}
+📍 Место: {event_data.get('location', 'Не указано')}
+🎟️ Категория: {order_info['Категория']}
+🔢 Количество: {order_info['Количество']} шт.
+💵 Сумма: {order_info['Сумма']} руб.
+🆔 ID заказа: {order_id}
+
+📱 Сохраните этот QR-код! Он потребуется для входа на мероприятие."""
         
         # Отправляем билет пользователю
         app = Application.builder().token(BOT_TOKEN).build()
@@ -131,15 +130,13 @@ async def send_ticket_after_payment(user_id, order_id):
             await app.bot.send_photo(
                 chat_id=user_id,
                 photo=qr_code,
-                caption=ticket_message,
-                parse_mode='Markdown'
+                caption=ticket_message
             )
             print(f"✅ Билет отправлен пользователю {user_id}")
         else:
             await app.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ Оплата прошла успешно! Ваш ID билета: {order_id}",
-                parse_mode='Markdown'
+                text=ticket_message
             )
             print(f"✅ Сообщение отправлено пользователю {user_id} (без QR-кода)")
             
@@ -2279,5 +2276,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
