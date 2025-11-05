@@ -201,7 +201,7 @@ print("=== ИМПОРТЫ УСПЕШНЫ ===")
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден! Установите переменную окружения BOT_TOKEN")
-ADMIN_IDS = [5080055389, 400097852]
+ADMIN_IDS = os.environ.get('ADMIN_IDS', '').split(',')
 
 # Состояния разговора
 SELECTING_EVENT, SELECTING_CATEGORY, SELECTING_QUANTITY, CONFIRMING = range(4)
@@ -2276,6 +2276,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
