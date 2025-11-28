@@ -21,7 +21,47 @@ import asyncio
 import threading
 
 import asyncio
-from yookassa import Payment
+from yookassa import Payment/
+
+import asyncio
+from aiohttp import web
+import threading
+
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def start_health_server():
+    """Запускает aiohttp сервер для health checks"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    port = int(os.environ.get("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Health check server started on port {port}")
+    
+    # Бесконечный цикл чтобы сервер не закрывался
+    while True:
+        await asyncio.sleep(3600)
+
+def run_bot():
+    """Запускает телеграм бота"""
+    print("🤖 Starting Telegram bot...")
+    # Запускаем проверку pending платежей
+    asyncio.get_event_loop().create_task(check_pending_payments())
+    main()
+
+if __name__ == '__main__':
+    print("🚀 Starting application...")
+    
+    # Запускаем health server в asyncio
+    asyncio.get_event_loop().create_task(start_health_server())
+    
+    # Запускаем бота
+    run_bot()
 
 def get_admin_ids():
     """
@@ -2361,6 +2401,7 @@ if __name__ == '__main__':
     
     # Запускаем HTTP сервер (блокирующий вызов)
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
 
 
 
