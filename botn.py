@@ -24,8 +24,6 @@ import asyncio
 from yookassa import Payment
 
 import asyncio
-from aiohttp import web
-import threading
 
 async def health_check(request):
     return web.Response(text="Bot is running!")
@@ -2377,6 +2375,7 @@ if __name__ == '__main__':
     
     # Запускаем бота
     main()
+
 
 
 
