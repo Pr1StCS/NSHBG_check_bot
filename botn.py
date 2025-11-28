@@ -2330,7 +2330,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 if __name__ == '__main__':
-
+    # Просто запускаем бота
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🚀 Starting bot on port {port}")
     main()
 
 
