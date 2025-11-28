@@ -2330,10 +2330,37 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 if __name__ == '__main__':
-    # Просто запускаем бота
+    import threading
+    from flask import Flask
+    
+    # Запускаем бота в фоне
+    def run_bot_in_background():
+        print("🤖 Starting Telegram bot in background...")
+        # Запускаем проверку pending платежей
+        asyncio.get_event_loop().create_task(check_pending_payments())
+        main()
+    
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot_in_background, daemon=True)
+    bot_thread.start()
+    
+    # Создаем простой HTTP сервер для Render health checks
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def home():
+        return "Telegram Bot is running!"
+    
+    @app.route('/health')
+    def health():
+        return {"status": "ok", "service": "telegram-bot"}
+    
+    # Получаем порт из переменных окружения Render
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting bot on port {port}")
-    main()
+    print(f"🌐 Starting health check server on port {port}")
+    
+    # Запускаем HTTP сервер (блокирующий вызов)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 
 
