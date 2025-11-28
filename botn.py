@@ -1424,7 +1424,8 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== ОСНОВНАЯ ФУНКЦИЯ =====
 
-def main():
+async def main_async():
+    """Асинхронная основная функция"""
     print("=== ЗАПУСК БОТА ===")
     
     try:
@@ -1507,7 +1508,7 @@ def main():
         print("Ожидание сообщений...")
         
         # Запуск бота
-        application.run_polling(
+        await application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
@@ -1515,6 +1516,10 @@ def main():
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске бота: {e}")
         sys.exit(1)
+
+def main():
+    """Основная функция"""
+    asyncio.run(main_async())
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
