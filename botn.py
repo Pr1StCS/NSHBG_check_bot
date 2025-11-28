@@ -21,7 +21,7 @@ import asyncio
 import threading
 
 import asyncio
-from yookassa import Payment/
+from yookassa import Payment
 
 import asyncio
 from aiohttp import web
@@ -2377,6 +2377,7 @@ if __name__ == '__main__':
     
     # Запускаем бота
     main()
+
 
 
 
