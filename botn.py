@@ -1,5 +1,7 @@
 import os
 import json
+import sys
+import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import csv
@@ -10,6 +12,14 @@ from io import BytesIO
 from collections import defaultdict
 from dotenv import load_dotenv
 from yookassa import Configuration, Payment
+
+# ===== НАСТРОЙКА ЛОГГИРОВАНИЯ =====
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # ===== КОНСТАНТЫ И ПЕРЕМЕННЫЕ =====
 
@@ -42,7 +52,7 @@ def get_admin_ids():
         # Если не установлено, используем дефолтные значения
         if not admin_ids_str:
             admin_ids_str = '5080055389'
-            print("⚠️ ADMIN_IDS не найдены в переменных окружения, использую дефолтные")
+            logger.info("⚠️ ADMIN_IDS не найдены в переменных окружения, использую дефолтные")
         
         # Преобразуем строку в список целых чисел
         admin_ids = []
@@ -52,13 +62,13 @@ def get_admin_ids():
                 try:
                     admin_ids.append(int(id_str_clean))
                 except ValueError:
-                    print(f"⚠️ Некорректный ID админа: {id_str_clean}")
+                    logger.error(f"⚠️ Некорректный ID админа: {id_str_clean}")
         
-        print(f"✅ Загружено ADMIN_IDS: {admin_ids}")
+        logger.info(f"✅ Загружено ADMIN_IDS: {admin_ids}")
         return admin_ids
         
     except Exception as e:
-        print(f"❌ Ошибка при загрузке ADMIN_IDS: {e}")
+        logger.error(f"❌ Ошибка при загрузке ADMIN_IDS: {e}")
         return [5080055389, 400097852]
 
 def is_admin(user_id):
@@ -67,7 +77,7 @@ def is_admin(user_id):
         admin_ids = get_admin_ids()
         return user_id in admin_ids
     except Exception as e:
-        print(f"❌ Ошибка при проверке прав админа: {e}")
+        logger.error(f"❌ Ошибка при проверке прав админа: {e}")
         return False
 
 def init_directories():
@@ -100,7 +110,7 @@ def update_orders_file():
         required_columns = ["Дата", "ID пользователя", "Имя", "Мероприятие", "Категория", "Количество", "Сумма", "ID заказа", "Статус", "Payment ID"]
         
         if not all(col in existing_columns for col in required_columns):
-            print("Обновление структуры файла заказов...")
+            logger.info("Обновление структуры файла заказов...")
             
             # Читаем старые заказы
             with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
@@ -125,10 +135,10 @@ def update_orders_file():
                         order.get('Статус', 'active'),
                         order.get('Payment ID', 'no_payment_id')
                     ])
-            print("Структура файла обновлена")
+            logger.info("Структура файла обновлена")
             
     except Exception as e:
-        print(f"Ошибка при обновлении файла: {e}")
+        logger.error(f"Ошибка при обновлении файла: {e}")
         init_orders_file()
         
 def load_events():
@@ -141,7 +151,7 @@ def load_events():
         else:
             return {}
     except Exception as e:
-        print(f"Ошибка загрузки мероприятий: {e}")
+        logger.error(f"Ошибка загрузки мероприятий: {e}")
         return {}
 
 def calculate_dynamic_price(event_name, category, base_price):
@@ -184,7 +194,7 @@ def calculate_dynamic_price(event_name, category, base_price):
         return base_price, None
             
     except Exception as e:
-        print(f"Ошибка расчета динамической цены: {e}")
+        logger.error(f"Ошибка расчета динамической цены: {e}")
         return base_price, None
 
 def get_price_info_text(current_price, original_price, category):
@@ -228,7 +238,7 @@ def save_events(events_data):
             json.dump(normalized_events, file, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        print(f"Ошибка сохранения мероприятий: {e}")
+        logger.error(f"Ошибка сохранения мероприятий: {e}")
         return False
 
 def delete_event_photo(photo_path):
@@ -239,7 +249,7 @@ def delete_event_photo(photo_path):
             return True
         return False
     except Exception as e:
-        print(f"Ошибка удаления фото: {e}")
+        logger.error(f"Ошибка удаления фото: {e}")
         return False
 
 async def save_event_photo(photo_file, event_name):
@@ -247,21 +257,32 @@ async def save_event_photo(photo_file, event_name):
     try:
         os.makedirs(PHOTOS_DIR, exist_ok=True)
         
+        # Создаем безопасное имя файла
         safe_event_name = "".join(c for c in event_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
         safe_event_name = safe_event_name.replace(' ', '_')
         
-        file_extension = photo_file.file_path.split('.')[-1] if photo_file.file_path else 'jpg'
+        # Определяем расширение файла
+        file_path = photo_file.file_path
+        if file_path and '.' in file_path:
+            file_extension = file_path.split('.')[-1].lower()
+            # Ограничиваем допустимые расширения
+            if file_extension not in ['jpg', 'jpeg', 'png', 'webp']:
+                file_extension = 'jpg'
+        else:
+            file_extension = 'jpg'
+        
         timestamp = int(datetime.datetime.now().timestamp())
         filename = f"{safe_event_name}_{timestamp}.{file_extension}"
         filepath = os.path.join(PHOTOS_DIR, filename)
         
-        print(f"DEBUG: Сохранение фото в: {filepath}")
+        logger.info(f"Сохранение фото в: {filepath}")
         await photo_file.download_to_drive(filepath)
         
-        print(f"✅ Фото сохранено: {filepath}")
+        logger.info(f"✅ Фото сохранено: {filepath}")
         return filepath
+        
     except Exception as e:
-        print(f"❌ Ошибка сохранения фото: {e}")
+        logger.error(f"❌ Ошибка сохранения фото: {e}")
         return None
 
 async def generate_qr_code(order_id: str):
@@ -294,7 +315,7 @@ async def check_pending_payments():
             # Ждем 30 секунд между проверками
             await asyncio.sleep(30)
             
-            print("🔍 Проверка pending платежей...")
+            logger.info("🔍 Проверка pending платежей...")
             
             # Ищем заказы со статусом pending
             with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
@@ -309,21 +330,21 @@ async def check_pending_payments():
                         payment = Payment.find_one(payment_id)
                         
                         if payment.status == 'succeeded':
-                            print(f"✅ Платеж подтвержден: {payment_id}")
+                            logger.info(f"✅ Платеж подтвержден: {payment_id}")
                             # Обновляем статус заказа
                             update_order_status(order['ID заказа'], "active")
                             # Отправляем билет
                             await send_ticket_after_payment(int(order['ID пользователя']), order['ID заказа'])
                             
                         elif payment.status in ['canceled', 'failed']:
-                            print(f"❌ Платеж отменен: {payment_id}")
+                            logger.info(f"❌ Платеж отменен: {payment_id}")
                             update_order_status(order['ID заказа'], "canceled")
                             
                     except Exception as e:
-                        print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+                        logger.error(f"❌ Ошибка проверки платежа {payment_id}: {e}")
                         
         except Exception as e:
-            print(f"❌ Ошибка в check_pending_payments: {e}")
+            logger.error(f"❌ Ошибка в check_pending_payments: {e}")
 
 async def check_single_payment(payment_id, order_id, user_id):
     """Проверяет статус конкретного платежа"""
@@ -336,26 +357,26 @@ async def check_single_payment(payment_id, order_id, user_id):
             payment = Payment.find_one(payment_id)
             
             if payment.status == 'succeeded':
-                print(f"✅ Платеж подтвержден: {payment_id}")
+                logger.info(f"✅ Платеж подтвержден: {payment_id}")
                 update_order_status(order_id, "active")
                 await send_ticket_after_payment(user_id, order_id)
                 break
                 
             elif payment.status in ['canceled', 'failed']:
-                print(f"❌ Платеж отменен: {payment_id}")
+                logger.info(f"❌ Платеж отменен: {payment_id}")
                 update_order_status(order_id, "canceled")
                 break
                 
             elif payment.status == 'pending':
-                print(f"⏳ Платеж еще в процессе: {payment_id} (проверка {i+1}/{max_checks})")
+                logger.info(f"⏳ Платеж еще в процессе: {payment_id} (проверка {i+1}/{max_checks})")
                 
         except Exception as e:
-            print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+            logger.error(f"❌ Ошибка проверки платежа {payment_id}: {e}")
 
 async def send_ticket_after_payment(user_id, order_id):
     """Отправляет билет пользователю после успешной оплаты"""
     try:
-        print(f"🚀 Отправка билета пользователю {user_id}, заказ {order_id}")
+        logger.info(f"🚀 Отправка билета пользователю {user_id}, заказ {order_id}")
         
         # Находим информацию о заказе
         with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
@@ -365,7 +386,7 @@ async def send_ticket_after_payment(user_id, order_id):
                     order_info = order
                     break
             else:
-                print(f"❌ Заказ {order_id} не найден")
+                logger.error(f"❌ Заказ {order_id} не найден")
                 return
         
         # Генерируем QR-код
@@ -396,16 +417,16 @@ async def send_ticket_after_payment(user_id, order_id):
                 photo=qr_code,
                 caption=ticket_message
             )
-            print(f"✅ Билет отправлен пользователю {user_id}")
+            logger.info(f"✅ Билет отправлен пользователю {user_id}")
         else:
             await app.bot.send_message(
                 chat_id=user_id,
                 text=ticket_message
             )
-            print(f"✅ Сообщение отправлено пользователю {user_id} (без QR-кода)")
+            logger.info(f"✅ Сообщение отправлено пользователю {user_id} (без QR-кода)")
             
     except Exception as e:
-        print(f"❌ Ошибка отправки билета: {e}")
+        logger.error(f"❌ Ошибка отправки билета: {e}")
 
 def update_order_status(order_id, status):
     """Обновляет статус заказа в CSV"""
@@ -431,12 +452,12 @@ def update_order_status(order_id, status):
                 writer.writeheader()
                 writer.writerows(orders)
                 
-            print(f"✅ Статус заказа {order_id} обновлен на '{status}'")
+            logger.info(f"✅ Статус заказа {order_id} обновлен на '{status}'")
         else:
-            print(f"❌ Заказ {order_id} не найден для обновления")
+            logger.error(f"❌ Заказ {order_id} не найден для обновления")
             
     except Exception as e:
-        print(f"❌ Ошибка обновления статуса: {e}")
+        logger.error(f"❌ Ошибка обновления статуса: {e}")
 
 # ===== ФУНКЦИИ АДМИН-ПАНЕЛИ =====
 
@@ -596,61 +617,65 @@ async def manage_photos_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка загруженного фото"""
-    print(f"DEBUG: Получено фото, user_id: {update.message.from_user.id}")
+    user_id = update.message.from_user.id
+    logger.info(f"Получено фото от пользователя {user_id}")
     
-    # Проверяем права админа внутри функции
-    if not is_admin(update.message.from_user.id):
-        print(f"DEBUG: Фото от не-админа {update.message.from_user.id} - игнорируем")
+    # Проверяем права админа
+    if not is_admin(user_id):
+        logger.info(f"Фото от не-админа {user_id} - игнорируем")
         return
     
-    # Проверяем что мы в режиме загрузки фото
-    if context.user_data.get('action') != 'uploading_photo':
-        print(f"DEBUG: Фото получено, но action не uploading_photo: {context.user_data.get('action')}")
-        await update.message.reply_text("❌ Сначала выберите 'Загрузить новое фото' в меню управления фото")
+    # Проверяем контекст
+    current_action = context.user_data.get('action')
+    if current_action != 'uploading_photo':
+        logger.info(f"Фото вне контекста загрузки: {current_action}")
         return
     
     if 'editing_event' not in context.user_data:
-        print("DEBUG: Нет editing_event в user_data")
         await update.message.reply_text("❌ Ошибка: мероприятие не выбрано")
-        return await manage_photos_start(update, context)
+        return
     
     event_name = context.user_data['editing_event']
-    event_data = EVENTS[event_name]
-    
-    print(f"DEBUG: Загрузка фото для мероприятия: {event_name}")
     
     try:
-        # Получаем файл фото
+        # Получаем файл фото наибольшего качества
         photo_file = await update.message.photo[-1].get_file()
-        print(f"DEBUG: Получен файл фото: {photo_file.file_path}")
         
         # Сохраняем фото
         new_photo_path = await save_event_photo(photo_file, event_name)
         
         if not new_photo_path:
             await update.message.reply_text("❌ Ошибка при сохранении фото")
-            return await show_event_photo_menu(update, context)
-        
-        # Удаляем старое фото если есть
-        if event_data.get('photo') and os.path.exists(event_data['photo']):
-            try:
-                os.remove(event_data['photo'])
-                print(f"DEBUG: Удалено старое фото: {event_data['photo']}")
-            except Exception as e:
-                print(f"DEBUG: Ошибка удаления старого фото: {e}")
+            return
         
         # Обновляем данные мероприятия
+        event_data = EVENTS[event_name]
+        
+        # Удаляем старое фото если есть
+        old_photo = event_data.get('photo')
+        if old_photo and os.path.exists(old_photo):
+            try:
+                os.remove(old_photo)
+                logger.info(f"Удалено старое фото: {old_photo}")
+            except Exception as e:
+                logger.error(f"Ошибка удаления старого фото: {e}")
+        
+        # Сохраняем новый путь
         event_data['photo'] = new_photo_path
         
         if save_events(EVENTS):
-            # Показываем новое фото
-            with open(new_photo_path, 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=f"✅ Фото для мероприятия '{event_name}' успешно обновлено!",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            # Показываем превью нового фото
+            try:
+                with open(new_photo_path, 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=f"✅ Фото для мероприятия '{event_name}' успешно обновлено!",
+                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                    )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"✅ Фото сохранено, но не удалось показать превью: {e}"
                 )
-            print(f"DEBUG: Фото успешно обновлено для {event_name}")
         else:
             await update.message.reply_text("❌ Ошибка при сохранении данных мероприятия")
         
@@ -658,7 +683,7 @@ async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['action'] = 'event_photo_menu'
         
     except Exception as e:
-        print(f"❌ Ошибка загрузки фото: {e}")
+        logger.error(f"Ошибка загрузки фото: {e}")
         await update.message.reply_text("❌ Ошибка при загрузке фото")
 
 async def show_event_photo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -704,7 +729,7 @@ async def upload_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await manage_photos_start(update, context)
     
     event_name = context.user_data['editing_event']
-    print(f"DEBUG: Начало загрузки фото для {event_name}")
+    logger.info(f"Начало загрузки фото для {event_name}")
     
     await update.message.reply_text(
         f"📤 Пришлите фото для мероприятия '{event_name}' (в виде изображения, не файлом):",
@@ -712,7 +737,7 @@ async def upload_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     
     context.user_data['action'] = 'uploading_photo'
-    print(f"DEBUG: Установлен action: uploading_photo")
+    logger.info(f"Установлен action: uploading_photo")
 
 async def generate_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Генерация отчетов"""
@@ -886,7 +911,7 @@ async def mark_ticket_as_used(order_id: str):
             
         return True
     except Exception as e:
-        print(f"Ошибка при обновлении статуса билета: {e}")
+        logger.error(f"Ошибка при обновлении статуса билета: {e}")
         return False
 
 # ===== ОСНОВНЫЕ КОМАНДЫ БОТА =====
@@ -931,7 +956,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode='Markdown'
                     )
             except Exception as e:
-                print(f"Ошибка загрузки фото: {e}")
+                logger.error(f"Ошибка загрузки фото: {e}")
                 await update.message.reply_text(event_text, parse_mode='Markdown')
         else:
             await update.message.reply_text(event_text, parse_mode='Markdown')
@@ -968,11 +993,11 @@ async def create_yookassa_payment(amount, description, order_id):
             }
         })
         
-        print(f"✅ Платеж создан: {payment.id}")
+        logger.info(f"✅ Платеж создан: {payment.id}")
         return payment
         
     except Exception as e:
-        print(f"❌ Ошибка создания платежа: {e}")
+        logger.error(f"❌ Ошибка создания платежа: {e}")
         return None
 
 async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1003,7 +1028,7 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "pending", payment.id  # Сохраняем payment_id
             ])
         
-        print(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
+        logger.info(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
         
         # Отправляем ссылку для оплаты
         await update.message.reply_text(
@@ -1215,17 +1240,35 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+async def handle_text_during_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений во время загрузки фото"""
+    user_id = update.message.from_user.id
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('action') == 'uploading_photo':
+        if update.message.text == "🔙 Назад":
+            context.user_data['action'] = 'event_photo_menu'
+            await show_event_photo_menu(update, context)
+        else:
+            await update.message.reply_text(
+                "📤 Пожалуйста, отправьте фото или нажмите '🔙 Назад'"
+            )
+    else:
+        # Перенаправляем в обычный обработчик
+        await admin_handler(update, context)
+
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик админ-меню"""
     # ШАГ 1: Проверяем права внутри функции
     user_id = update.message.from_user.id
     if not is_admin(user_id):
-        print(f"DEBUG: Игнорируем сообщение от не-админа {user_id}")
+        logger.info(f"Игнорируем сообщение от не-админа {user_id}")
         return
     
     # ШАГ 2: Получаем текст сообщения
     choice = update.message.text
-    print(f"DEBUG: Админ {user_id} выбрал: '{choice}'")
+    logger.info(f"Админ {user_id} выбрал: '{choice}'")
     
     # ШАГ 3: Обработка кнопок главного меню
     if choice == "📊 Статистика":
@@ -1263,9 +1306,47 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "🔙 Назад":
         await admin_command(update, context)
     
+    elif choice == "📤 Загрузить новое фото":
+        await upload_photo_start(update, context)
+    
+    elif choice == "🗑️ Удалить фото":
+        if 'editing_event' in context.user_data:
+            event_name = context.user_data['editing_event']
+            event_data = EVENTS[event_name]
+            if event_data.get('photo'):
+                if delete_event_photo(event_data['photo']):
+                    event_data['photo'] = None
+                    save_events(EVENTS)
+                    await update.message.reply_text("✅ Фото удалено")
+                else:
+                    await update.message.reply_text("❌ Ошибка при удалении фото")
+            else:
+                await update.message.reply_text("❌ Фото не найдено")
+        await show_event_photo_menu(update, context)
+    
+    elif choice == "🔙 Назад к мероприятиям":
+        await manage_photos_start(update, context)
+    
     else:
-        # ШАГ 5: Если текст не распознан как кнопка
-        await update.message.reply_text("Пожалуйста, выберите действие из меню:")
+        # ШАГ 5: Если текст не распознан как кнопка, проверяем контекст
+        current_action = context.user_data.get('action')
+        
+        if current_action == 'manage_photos':
+            await show_event_photo_menu(update, context)
+        elif current_action == 'delete_event':
+            if choice in EVENTS:
+                # Удаляем мероприятие
+                event_data = EVENTS[choice]
+                if event_data.get('photo'):
+                    delete_event_photo(event_data['photo'])
+                del EVENTS[choice]
+                save_events(EVENTS)
+                await update.message.reply_text(f"✅ Мероприятие '{choice}' удалено")
+                await manage_events_menu(update, context)
+            else:
+                await update.message.reply_text("❌ Пожалуйста, выберите мероприятие из списка:")
+        else:
+            await update.message.reply_text("Пожалуйста, выберите действие из меню:")
 
 # ===== БАЗОВЫЕ КОМАНДЫ =====
 
@@ -1334,7 +1415,7 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode='Markdown'
                     )
             except Exception as e:
-                print(f"Ошибка загрузки фото: {e}")
+                logger.error(f"Ошибка загрузки фото: {e}")
                 await update.message.reply_text(event_text, parse_mode='Markdown')
         else:
             await update.message.reply_text(event_text, parse_mode='Markdown')
@@ -1346,83 +1427,98 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("=== ЗАПУСК БОТА ===")
     
-    # Инициализация
-    init_directories()
-    update_orders_file()
-    
-    # Загружаем мероприятия
-    global EVENTS
-    EVENTS = load_events()
-    print(f"✅ Загружено мероприятий: {len(EVENTS)}")
-    
-    # Получаем актуальный список админов
-    admin_ids = get_admin_ids()
-    print(f"✅ Админы: {admin_ids}")
-    
-    # Настройка ЮKassa
-    YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
-    YOOKASSA_SECRET_KEY = os.environ.get('YOOKASSA_SECRET_KEY')
+    try:
+        # Загрузка переменных окружения
+        load_dotenv()
+        
+        # Инициализация
+        init_directories()
+        update_orders_file()
+        
+        # Загружаем мероприятия
+        global EVENTS
+        EVENTS = load_events()
+        print(f"✅ Загружено мероприятий: {len(EVENTS)}")
+        
+        # Получаем актуальный список админов
+        admin_ids = get_admin_ids()
+        print(f"✅ Админы: {admin_ids}")
+        
+        # Настройка ЮKassa
+        YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
+        YOOKASSA_SECRET_KEY = os.environ.get('YOOKASSA_SECRET_KEY')
 
-    if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
-        Configuration.account_id = YOOKASSA_SHOP_ID
-        Configuration.secret_key = YOOKASSA_SECRET_KEY
-        print(f"✅ ЮKassa настроен (Shop ID: {YOOKASSA_SHOP_ID})")
-    else:
-        print("❌ ЮKassa не настроен - проверьте переменные окружения")
+        if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
+            Configuration.account_id = YOOKASSA_SHOP_ID
+            Configuration.secret_key = YOOKASSA_SECRET_KEY
+            print(f"✅ ЮKassa настроен (Shop ID: {YOOKASSA_SHOP_ID})")
+        else:
+            print("⚠️ ЮKassa не настроен - проверьте переменные окружения")
 
-    # Безопасное получение токена
-    global BOT_TOKEN
-    BOT_TOKEN = os.environ.get('BOT_TOKEN')
-    if not BOT_TOKEN:
-        raise ValueError("❌ BOT_TOKEN не найден! Установите переменную окружения BOT_TOKEN")
-    
-    app = Application.builder().token(BOT_TOKEN).build()
+        # Безопасное получение токена
+        global BOT_TOKEN
+        BOT_TOKEN = os.environ.get('BOT_TOKEN')
+        if not BOT_TOKEN:
+            raise ValueError("❌ BOT_TOKEN не найден! Установите переменную окружения BOT_TOKEN")
+        
+        # Создаем Application с обработкой ошибок
+        application = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler для покупки билетов
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start_command)],
-        states={
-            SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
-            SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
-            SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
-            CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
-            "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
-    app.add_handler(conv_handler)
-    
-    # Обработчик для фото
-    app.add_handler(MessageHandler(
-        filters.PHOTO,
-        handle_photo_upload
-    ))
-    
-    # Команды
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("id", get_id))
-    app.add_handler(CommandHandler("events", events_command))
-    app.add_handler(CommandHandler("check", check_ticket_command))
-    
-    # Обработчик для админов
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        admin_handler
-    ))
-    
-    # Обработчик ошибок
-    app.add_error_handler(error_handler)
-    
-    # Запускаем фоновую проверку pending платежей
-    asyncio.create_task(check_pending_payments())
-    
-    print("=== БОТ ЗАПУЩЕН ===")
-    app.run_polling()
+        # ConversationHandler для покупки билетов
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', start_command)],
+            states={
+                SELECTING_EVENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_event)],
+                SELECTING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_category)],
+                SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_quantity)],
+                CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
+                "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],
+            },
+            fallbacks=[CommandHandler('cancel', cancel)]
+        )
+        application.add_handler(conv_handler)
+        
+        # Обработчик для фото (добавляем фильтр)
+        application.add_handler(MessageHandler(
+            filters.PHOTO & filters.ChatType.PRIVATE,
+            handle_photo_upload
+        ))
+        
+        # Команды
+        application.add_handler(CommandHandler("admin", admin_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("id", get_id))
+        application.add_handler(CommandHandler("events", events_command))
+        application.add_handler(CommandHandler("check", check_ticket_command))
+        
+        # Обработчик текстовых сообщений для админов
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text_during_photo_upload
+        ))
+        
+        # Обработчик ошибок
+        application.add_error_handler(error_handler)
+        
+        # Запускаем фоновую проверку pending платежей
+        asyncio.create_task(check_pending_payments())
+        
+        print("=== БОТ ЗАПУЩЕН ===")
+        print("Ожидание сообщений...")
+        
+        # Запуск бота
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка при запуске бота: {e}")
+        sys.exit(1)
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
-    print(f"Ошибка: {context.error}")
+    logger.error(f"Ошибка: {context.error}")
     try:
         if update and update.message:
             await update.message.reply_text("❌ Произошла ошибка. Попробуйте еще раз.")
