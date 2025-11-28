@@ -14,16 +14,9 @@ from dotenv import load_dotenv
 import os
 import sys
 
-import os
 from yookassa import Configuration, Payment
 
-import asyncio
 import threading
-
-import asyncio
-from yookassa import Payment
-
-import asyncio
 
 async def health_check(request):
     return web.Response(text="Bot is running!")
@@ -49,7 +42,7 @@ def run_bot():
     """Запускает телеграм бота"""
     print("🤖 Starting Telegram bot...")
     # Запускаем проверку pending платежей
-    asyncio.get_event_loop().create_task(check_pending_payments())
+    asyncio.create_task(check_pending_payments())
     main()
 
 if __name__ == '__main__':
@@ -2375,6 +2368,7 @@ if __name__ == '__main__':
     
     # Запускаем бота
     main()
+
 
 
 
