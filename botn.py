@@ -438,6 +438,457 @@ def update_order_status(order_id, status):
     except Exception as e:
         print(f"❌ Ошибка обновления статуса: {e}")
 
+# ===== ФУНКЦИИ АДМИН-ПАНЕЛИ =====
+
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику заказов"""
+    try:
+        if not os.path.exists(ORDERS_FILE):
+            await update.message.reply_text("📊 Пока нет данных о заказах")
+            return
+
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+            
+        if not orders:
+            await update.message.reply_text("📊 Пока нет данных о заказах")
+            return
+        
+        total_orders = len(orders)
+        total_revenue = 0
+        total_tickets = 0
+        
+        event_stats = {}
+        for order in orders:
+            try:
+                amount = int(order.get('Сумма', 0))
+                total_revenue += amount
+            except (ValueError, TypeError):
+                amount = 0
+            
+            try:
+                quantity = int(order.get('Количество', 0))
+                total_tickets += quantity
+            except (ValueError, TypeError):
+                quantity = 0
+            
+            event = order.get('Мероприятие', 'Неизвестно')
+            if event not in event_stats:
+                event_stats[event] = {'count': 0, 'revenue': 0, 'tickets': 0}
+            
+            event_stats[event]['count'] += 1
+            event_stats[event]['revenue'] += amount
+            event_stats[event]['tickets'] += quantity
+        
+        stats_text = f"""
+📊 *Статистика заказов:*
+
+📈 Всего заказов: {total_orders}
+🎟️ Всего билетов: {total_tickets}
+💰 Общая выручка: {total_revenue} руб.
+
+*По мероприятиям:*
+"""
+        for event, stats in event_stats.items():
+            stats_text += f"\n🎭 *{event}*\n"
+            stats_text += f"   📦 Заказов: {stats['count']}\n"
+            stats_text += f"   🎟️ Билетов: {stats['tickets']} шт.\n"
+            stats_text += f"   💰 Выручка: {stats['revenue']} руб.\n"
+        
+        await update.message.reply_text(stats_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при загрузке статистики: {e}")
+
+async def manage_events_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления мероприятиями"""
+    keyboard = [
+        ["➕ Добавить мероприятие", "❌ Удалить мероприятие"],
+        ["✏️ Редактировать билеты", "🖼️ Управление фото"],
+        ["🔙 Назад"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    
+    events_list = "\n".join([f"• {event}" for event in EVENTS.keys()]) if EVENTS else "• Нет мероприятий"
+    
+    await update.message.reply_text(
+        f"🎭 *Управление мероприятиями*\n\nТекущие мероприятия:\n{events_list}\n\nВыберите действие:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления мероприятия"""
+    context.user_data.clear()
+    context.user_data['action'] = 'add_event'
+    context.user_data['step'] = 'name'
+    
+    await update.message.reply_text(
+        "🎭 *Создание нового мероприятия*\n\nВведите название мероприятия:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='Markdown'
+    )
+
+async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало удаления мероприятия"""
+    if not EVENTS:
+        await update.message.reply_text("❌ Нет мероприятий для удаления")
+        return
+    
+    keyboard = [list(EVENTS.keys()) + ["🔙 Назад"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🗑️ *Удаление мероприятия*\n\nВыберите мероприятие для удаления:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['action'] = 'delete_event'
+
+async def edit_tickets_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования билетов"""
+    if not EVENTS:
+        await update.message.reply_text("❌ Нет мероприятий для редактирования")
+        return await manage_events_menu(update, context)
+    
+    events_list = list(EVENTS.keys())
+    keyboard = []
+    
+    for i in range(0, len(events_list), 2):
+        keyboard.append(events_list[i:i+2])
+    
+    keyboard.append(["🔙 Назад"])
+    
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "Выберите мероприятие для редактирования билетов:",
+        reply_markup=reply_markup
+    )
+    
+    context.user_data['action'] = 'edit_tickets'
+
+async def manage_photos_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало управления фото мероприятий"""
+    if not EVENTS:
+        await update.message.reply_text("❌ Нет мероприятий для управления фото")
+        return await manage_events_menu(update, context)
+    
+    events_list = list(EVENTS.keys())
+    keyboard = []
+    
+    for i in range(0, len(events_list), 2):
+        keyboard.append(events_list[i:i+2])
+    
+    keyboard.append(["🔙 Назад"])
+    
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🖼️ *Управление фото мероприятий*\n\nВыберите мероприятие:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['action'] = 'manage_photos'
+
+async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка загруженного фото"""
+    print(f"DEBUG: Получено фото, user_id: {update.message.from_user.id}")
+    
+    # Проверяем права админа внутри функции
+    if not is_admin(update.message.from_user.id):
+        print(f"DEBUG: Фото от не-админа {update.message.from_user.id} - игнорируем")
+        return
+    
+    # Проверяем что мы в режиме загрузки фото
+    if context.user_data.get('action') != 'uploading_photo':
+        print(f"DEBUG: Фото получено, но action не uploading_photo: {context.user_data.get('action')}")
+        await update.message.reply_text("❌ Сначала выберите 'Загрузить новое фото' в меню управления фото")
+        return
+    
+    if 'editing_event' not in context.user_data:
+        print("DEBUG: Нет editing_event в user_data")
+        await update.message.reply_text("❌ Ошибка: мероприятие не выбрано")
+        return await manage_photos_start(update, context)
+    
+    event_name = context.user_data['editing_event']
+    event_data = EVENTS[event_name]
+    
+    print(f"DEBUG: Загрузка фото для мероприятия: {event_name}")
+    
+    try:
+        # Получаем файл фото
+        photo_file = await update.message.photo[-1].get_file()
+        print(f"DEBUG: Получен файл фото: {photo_file.file_path}")
+        
+        # Сохраняем фото
+        new_photo_path = await save_event_photo(photo_file, event_name)
+        
+        if not new_photo_path:
+            await update.message.reply_text("❌ Ошибка при сохранении фото")
+            return await show_event_photo_menu(update, context)
+        
+        # Удаляем старое фото если есть
+        if event_data.get('photo') and os.path.exists(event_data['photo']):
+            try:
+                os.remove(event_data['photo'])
+                print(f"DEBUG: Удалено старое фото: {event_data['photo']}")
+            except Exception as e:
+                print(f"DEBUG: Ошибка удаления старого фото: {e}")
+        
+        # Обновляем данные мероприятия
+        event_data['photo'] = new_photo_path
+        
+        if save_events(EVENTS):
+            # Показываем новое фото
+            with open(new_photo_path, 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=f"✅ Фото для мероприятия '{event_name}' успешно обновлено!",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+            print(f"DEBUG: Фото успешно обновлено для {event_name}")
+        else:
+            await update.message.reply_text("❌ Ошибка при сохранении данных мероприятия")
+        
+        # Возвращаем в меню управления фото
+        context.user_data['action'] = 'event_photo_menu'
+        
+    except Exception as e:
+        print(f"❌ Ошибка загрузки фото: {e}")
+        await update.message.reply_text("❌ Ошибка при загрузке фото")
+
+async def show_event_photo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню управления фото для выбранного мероприятия"""
+    event_name = update.message.text
+    
+    if event_name not in EVENTS:
+        await update.message.reply_text("❌ Пожалуйста, выберите мероприятие из списка:")
+        return
+    
+    context.user_data['editing_event'] = event_name
+    event_data = EVENTS[event_name]
+    
+    if event_data.get('photo') and os.path.exists(event_data['photo']):
+        with open(event_data['photo'], 'rb') as photo_file:
+            await update.message.reply_photo(
+                photo=photo_file,
+                caption=f"🖼️ Текущее фото мероприятия '{event_name}'"
+            )
+    
+    keyboard = [
+        ["📤 Загрузить новое фото", "🗑️ Удалить фото"],
+        ["🔙 Назад к мероприятиям", "🔙 Назад"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    status_text = "✅ Есть фото" if event_data.get('photo') and os.path.exists(event_data['photo']) else "❌ Нет фото"
+    
+    await update.message.reply_text(
+        f"🖼️ *Управление фото для '{event_name}'*\n\n"
+        f"Статус: {status_text}\n\n"
+        f"Выберите действие:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['action'] = 'event_photo_menu'
+
+async def upload_photo_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало загрузки фото"""
+    if 'editing_event' not in context.user_data:
+        await update.message.reply_text("❌ Сначала выберите мероприятие")
+        return await manage_photos_start(update, context)
+    
+    event_name = context.user_data['editing_event']
+    print(f"DEBUG: Начало загрузки фото для {event_name}")
+    
+    await update.message.reply_text(
+        f"📤 Пришлите фото для мероприятия '{event_name}' (в виде изображения, не файлом):",
+        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+    )
+    
+    context.user_data['action'] = 'uploading_photo'
+    print(f"DEBUG: Установлен action: uploading_photo")
+
+async def generate_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Генерация отчетов"""
+    try:
+        if not os.path.exists(ORDERS_FILE):
+            await update.message.reply_text("📈 Пока нет данных для отчета")
+            return
+
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+        
+        if not orders:
+            await update.message.reply_text("📈 Пока нет данных для отчета")
+            return
+        
+        report = "📈 *Отчет по заказам*\n\n"
+        report += f"Всего заказов: {len(orders)}\n"
+        
+        daily_stats = defaultdict(lambda: {'count': 0, 'revenue': 0, 'tickets': 0})
+        
+        for order in orders:
+            try:
+                date_str = order.get('Дата', '')
+                if date_str:
+                    date = date_str.split()[0]
+                else:
+                    date = 'Неизвестно'
+                
+                amount = int(order.get('Сумма', 0))
+                quantity = int(order.get('Количество', 0))
+                
+                daily_stats[date]['count'] += 1
+                daily_stats[date]['revenue'] += amount
+                daily_stats[date]['tickets'] += quantity
+            except (ValueError, TypeError, IndexError):
+                continue
+        
+        report += "\n*По дням:*\n"
+        for date, stats in sorted(daily_stats.items()):
+            report += f"📅 {date}: {stats['count']} зак., {stats['tickets']} бил., {stats['revenue']} руб.\n"
+        
+        await update.message.reply_text(report, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при генерации отчета: {e}")
+
+async def check_ticket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для проверки билетов"""
+    context.user_data['action'] = 'check_ticket'
+    await update.message.reply_text(
+        "📱 Введите код билета (ID заказа):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка билета"""
+    ticket_code = update.message.text.strip()
+    
+    try:
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+        
+        order_found = None
+        for order in orders:
+            if order['ID заказа'] == ticket_code:
+                order_found = order
+                break
+        
+        if not order_found:
+            await update.message.reply_text("❌ Билет не найден")
+            return
+        
+        status = order_found.get('Статус', 'active')
+        
+        if status == 'used':
+            await update.message.reply_text(
+                f"⚠️ *Билет уже использован!*\n\n"
+                f"🆔 ID: {ticket_code}\n"
+                f"👤 Покупатель: {order_found['Имя']}\n"
+                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
+                f"🎟️ Категория: {order_found['Категория']}\n"
+                f"🕒 Дата покупки: {order_found['Дата']}",
+            )
+        elif status == 'active':
+            await mark_ticket_as_used(ticket_code)
+            
+            await update.message.reply_text(
+                f"✅ *Билет подтвержден!*\n\n"
+                f"🆔 ID: {ticket_code}\n"
+                f"👤 Покупатель: {order_found['Имя']}\n"
+                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
+                f"🎟️ Категория: {order_found['Категория']}\n"
+                f"🔢 Количество: {order_found['Количество']} шт.\n"
+                f"💵 Сумма: {order_found['Сумма']} руб.\n\n"
+                f"✅ Билет отмечен как использованный",
+            )
+        else:
+            await update.message.reply_text(f"❌ Неизвестный статус билета: {status}")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
+
+async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, order_id: str):
+    """Проверка билета по ID (для использования из QR-кода)"""
+    try:
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+        
+        order_found = None
+        for order in orders:
+            if order['ID заказа'] == order_id:
+                order_found = order
+                break
+        
+        if not order_found:
+            await update.message.reply_text("❌ Билет не найден")
+            return ConversationHandler.END
+        
+        status = order_found.get('Статус', 'active')
+        
+        if status == 'used':
+            await update.message.reply_text(
+                f"⚠️ Билет уже использован!\n\n"
+                f"🆔 ID: {order_id}\n"
+                f"👤 Покупатель: {order_found['Имя']}\n"
+                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
+                f"🎟️ Категория: {order_found['Категория']}\n"
+                f"🕒 Дата покупки: {order_found['Дата']}"
+            )
+        elif status == 'active':
+            await mark_ticket_as_used(order_id)
+            
+            await update.message.reply_text(
+                f"✅ Билет подтвержден!\n\n"
+                f"🆔 ID: {order_id}\n"
+                f"👤 Покупатель: {order_found['Имя']}\n"
+                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
+                f"🎟️ Категория: {order_found['Категория']}\n"
+                f"🔢 Количество: {order_found['Количество']} шт.\n"
+                f"💵 Сумма: {order_found['Сумма']} руб.\n\n"
+                f"✅ Билет отмечен как использованный"
+            )
+        else:
+            await update.message.reply_text(f"❌ Неизвестный статус билета: {status}")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
+    
+    return ConversationHandler.END
+
+async def mark_ticket_as_used(order_id: str):
+    """Помечает билет как использованный"""
+    try:
+        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+            fieldnames = reader.fieldnames
+        
+        for order in orders:
+            if order['ID заказа'] == order_id:
+                order['Статус'] = 'used'
+                break
+        
+        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(orders)
+            
+        return True
+    except Exception as e:
+        print(f"Ошибка при обновлении статуса билета: {e}")
+        return False
+
 # ===== ОСНОВНЫЕ КОМАНДЫ БОТА =====
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -814,9 +1265,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     else:
         # ШАГ 5: Если текст не распознан как кнопка
-        await process_admin_text(update, context)
-
-# ... (остальные функции админ-панели остаются без изменений) ...
+        await update.message.reply_text("Пожалуйста, выберите действие из меню:")
 
 # ===== БАЗОВЫЕ КОМАНДЫ =====
 
