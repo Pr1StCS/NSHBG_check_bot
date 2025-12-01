@@ -1412,13 +1412,356 @@ async def process_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def add_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало добавления мероприятия"""
+    context.user_data.clear()
+    context.user_data['action'] = 'add_event'
+    context.user_data['step'] = 'name'
+    
     await update.message.reply_text(
         "🎭 *Создание нового мероприятия*\n\nВведите название мероприятия:",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode='Markdown'
     )
-    context.user_data['action'] = 'add_event'
-    context.user_data['step'] = 'name'
+
+async def process_add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка добавления мероприятия"""
+    user_data = context.user_data
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await manage_events_menu(update, context)
+        return
+    
+    step = user_data.get('step')
+    
+    if step == 'name':
+        user_data['event_name'] = text
+        user_data['step'] = 'date'
+        
+        await update.message.reply_text(
+            "📅 Введите дату и время мероприятия (например: 2024-12-25 19:00):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+    elif step == 'date':
+        user_data['event_date'] = text
+        user_data['step'] = 'location'
+        
+        await update.message.reply_text(
+            "📍 Введите место проведения мероприятия:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+    elif step == 'location':
+        user_data['event_location'] = text
+        user_data['step'] = 'description'
+        
+        keyboard = [["📝 Добавить описание", "⏭️ Пропустить описание"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            "📝 Хотите добавить описание мероприятия?",
+            reply_markup=reply_markup
+        )
+        
+    elif step == 'description':
+        if text == "📝 Добавить описание":
+            user_data['step'] = 'description_text'
+            await update.message.reply_text(
+                "Введите описание мероприятия:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        elif text == "⏭️ Пропустить описание":
+            user_data['event_description'] = ""
+            user_data['step'] = 'tickets'
+            await show_tickets_menu(update, context)
+        
+    elif step == 'description_text':
+        user_data['event_description'] = text
+        user_data['step'] = 'tickets'
+        await show_tickets_menu(update, context)
+
+async def show_tickets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню для добавления билетов"""
+    user_data = context.user_data
+    
+    summary = f"""
+📋 *Сводка мероприятия:*
+
+🎭 Название: {user_data.get('event_name', 'Не указано')}
+📅 Дата: {user_data.get('event_date', 'Не указано')}
+📍 Место: {user_data.get('event_location', 'Не указано')}
+📝 Описание: {user_data.get('event_description', 'Нет описания')}
+
+Теперь добавьте билеты к мероприятию:
+    """
+    
+    keyboard = [
+        ["🎫 Добавить билет"],
+        ["✅ Завершить создание"],
+        ["🔙 Назад"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        summary,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def process_tickets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка меню билетов"""
+    user_data = context.user_data
+    text = update.message.text
+    
+    if text == "🎫 Добавить билет":
+        user_data['ticket_step'] = 'name'
+        user_data['adding_ticket'] = True
+        
+        await update.message.reply_text(
+            "Введите название категории билета (например: Стандарт, VIP, Премиум):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+    elif text == "✅ Завершить создание":
+        # Создаем мероприятие
+        event_name = user_data['event_name']
+        
+        EVENTS[event_name] = {
+            'date': user_data['event_date'],
+            'location': user_data['event_location'],
+            'description': user_data.get('event_description', ''),
+            'photo': None,
+            'tickets': user_data.get('event_tickets', {}),
+            'pricing_rules': {}
+        }
+        
+        if save_events(EVENTS):
+            await update.message.reply_text(
+                f"✅ Мероприятие '{event_name}' успешно создано!",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка при сохранении мероприятия",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        
+        user_data.clear()
+        await admin_command(update, context)
+        
+    elif text == "🔙 Назад":
+        user_data['step'] = 'description'
+        keyboard = [["📝 Добавить описание", "⏭️ Пропустить описание"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            "📝 Хотите добавить описание мероприятия?",
+            reply_markup=reply_markup
+        )
+
+async def process_add_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка добавления билета"""
+    user_data = context.user_data
+    text = update.message.text
+    ticket_step = user_data.get('ticket_step')
+    
+    if ticket_step == 'name':
+        user_data['ticket_name'] = text
+        user_data['ticket_step'] = 'price'
+        
+        await update.message.reply_text(
+            "💵 Введите цену билета (только число, в рублях):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+    elif ticket_step == 'price':
+        try:
+            price = int(text)
+            if price <= 0:
+                raise ValueError
+            
+            user_data['ticket_price'] = price
+            user_data['ticket_step'] = 'description'
+            
+            keyboard = [["📝 Добавить описание", "⏭️ Пропустить"]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                "📝 Хотите добавить описание для этой категории билета?",
+                reply_markup=reply_markup
+            )
+            
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Цена должна быть положительным числом. Введите цену:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            
+    elif ticket_step == 'description':
+        if text == "📝 Добавить описание":
+            user_data['ticket_step'] = 'description_text'
+            await update.message.reply_text(
+                "Введите описание категории билета:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        elif text == "⏭️ Пропустить":
+            # Сохраняем билет без описания
+            ticket_name = user_data['ticket_name']
+            ticket_price = user_data['ticket_price']
+            
+            # Инициализируем словарь билетов если его нет
+            if 'event_tickets' not in user_data:
+                user_data['event_tickets'] = {}
+            
+            user_data['event_tickets'][ticket_name] = {
+                'price': ticket_price,
+                'description': ''
+            }
+            
+            # Сбрасываем данные билета
+            user_data.pop('ticket_name', None)
+            user_data.pop('ticket_price', None)
+            user_data.pop('ticket_step', None)
+            user_data.pop('adding_ticket', None)
+            
+            # Показываем меню билетов с обновленной информацией
+            await show_tickets_menu_with_added(update, context)
+            
+    elif ticket_step == 'description_text':
+        ticket_name = user_data['ticket_name']
+        ticket_price = user_data['ticket_price']
+        ticket_description = text
+        
+        # Инициализируем словарь билетов если его нет
+        if 'event_tickets' not in user_data:
+            user_data['event_tickets'] = {}
+        
+        user_data['event_tickets'][ticket_name] = {
+            'price': ticket_price,
+            'description': ticket_description
+        }
+        
+        # Сбрасываем данные билета
+        user_data.pop('ticket_name', None)
+        user_data.pop('ticket_price', None)
+        user_data.pop('ticket_step', None)
+        user_data.pop('adding_ticket', None)
+        
+        # Показываем меню билетов с обновленной информацией
+        await show_tickets_menu_with_added(update, context)
+
+async def show_tickets_menu_with_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню билетов с уже добавленными билетами"""
+    user_data = context.user_data
+    
+    summary = f"""
+📋 *Сводка мероприятия:*
+
+🎭 Название: {user_data.get('event_name', 'Не указано')}
+📅 Дата: {user_data.get('event_date', 'Не указано')}
+📍 Место: {user_data.get('event_location', 'Не указано')}
+📝 Описание: {user_data.get('event_description', 'Нет описания')}
+
+🎟️ *Добавленные билеты:*
+"""
+    
+    if 'event_tickets' in user_data and user_data['event_tickets']:
+        for ticket_name, ticket_info in user_data['event_tickets'].items():
+            price = ticket_info['price']
+            description = ticket_info['description']
+            summary += f"• {ticket_name}: {price} руб."
+            if description:
+                summary += f" ({description})"
+            summary += "\n"
+    else:
+        summary += "• Пока нет добавленных билетов\n"
+    
+    summary += "\nВыберите действие:"
+    
+    keyboard = [
+        ["🎫 Добавить билет"],
+        ["✅ Завершить создание"],
+        ["🔙 Назад"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        summary,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def process_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений в админ-панели"""
+    if not is_admin(update.message.from_user.id):
+        return
+    
+    text = update.message.text
+    user_data = context.user_data
+    
+    print(f"DEBUG: Обработка текста '{text}', action: {user_data.get('action')}")
+    
+    # Обработка проверки билетов
+    if user_data.get('action') == 'check_ticket':
+        await check_ticket(update, context)
+        user_data.clear()
+        return
+    
+    # Обработка добавления мероприятия
+    if user_data.get('action') == 'add_event':
+        await process_add_event(update, context)
+        return
+    
+    # Обработка добавления билетов к мероприятию
+    if user_data.get('action') == 'add_event' and user_data.get('adding_ticket'):
+        await process_add_ticket(update, context)
+        return
+    
+    # Обработка меню билетов
+    if user_data.get('action') == 'add_event' and user_data.get('step') == 'tickets':
+        await process_tickets_menu(update, context)
+        return
+    
+    # Навигация
+    if text == "🔙 Назад":
+        if user_data.get('action') == 'manage_orders':
+            await admin_command(update, context)
+        elif user_data.get('action') == 'import_csv':
+            await add_existing_order_command(update, context)
+        elif user_data.get('action') == 'add_event':
+            await manage_events_menu(update, context)
+        else:
+            await admin_command(update, context)
+        user_data.clear()
+        return
+    
+    # Обработка кнопок из меню управления мероприятиями
+    if text == "➕ Добавить мероприятие":
+        await add_event_start(update, context)
+        return
+        
+    elif text == "❌ Удалить мероприятие":
+        await delete_event_start(update, context)
+        return
+        
+    elif text == "✏️ Редактировать билеты":
+        await edit_tickets_start(update, context)
+        return
+        
+    elif text == "🖼️ Управление фото":
+        await manage_photos_start(update, context)
+        return
+    
+    # Обработка кнопок из меню управления заказами
+    if text == "📋 Просмотр всех заказов":
+        await view_all_orders(update, context)
+        return
+    
+    if text == "📝 Добавить вручную":
+        return await add_order_manually_start(update, context)
+    
+    if text == "📁 Импорт из CSV":
+        return await import_csv_start(update, context)
 
 async def delete_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало удаления мероприятия"""
@@ -1666,3 +2009,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
