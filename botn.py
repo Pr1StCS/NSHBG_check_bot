@@ -784,7 +784,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
-        return "PAYMENT"  # Переходим к состоянию оплаты
+        return "PAYMENT"  # ← Возвращаем состояние "PAYMENT"
         
     elif choice == "❌ Отменить":
         await update.message.reply_text(
@@ -795,15 +795,20 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_payment_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка шага оплаты"""
-    if update.message.text == "💳 Перейти к оплате":
+    choice = update.message.text
+    
+    if choice == "💳 Перейти к оплате":
+        print(f"DEBUG: Нажата кнопка 'Перейти к оплате'")
         return await process_payment(update, context)
-    elif update.message.text == "❌ Отменить заказ":
+    elif choice == "❌ Отменить заказ":
+        print(f"DEBUG: Нажата кнопка 'Отменить заказ'")
         await update.message.reply_text(
             "Заказ отменен.",
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
     else:
+        print(f"DEBUG: Неизвестный выбор: {choice}")
         await update.message.reply_text("Пожалуйста, выберите вариант из кнопок:")
         return "PAYMENT"
 
@@ -2332,6 +2337,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
