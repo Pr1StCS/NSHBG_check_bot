@@ -2303,7 +2303,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CommandHandler("events", events_command))
-    app.add_handler(CommandHandler("check", check_ticket_command))  # ← ИСПРАВЛЕНО!
+    app.add_handler(CommandHandler("check", check_ticket_command))
     
     # Обработчик для админов (УПРОЩЕННЫЙ ФИЛЬТР)
     app.add_handler(MessageHandler(
@@ -2319,6 +2319,20 @@ def main():
     
     print("=== БОТ ЗАПУЩЕН ===")
     app.run_polling()
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    print(f"Ошибка: {context.error}")
+    try:
+        if update and update.message:
+            await update.message.reply_text("❌ Произошла ошибка. Попробуйте еще раз.")
+    except:
+        pass
+
+if __name__ == '__main__':
+
+    main()
+
 
 
 
