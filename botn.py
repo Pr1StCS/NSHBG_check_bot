@@ -11,17 +11,11 @@ from collections import defaultdict
 from dotenv import load_dotenv
 
 # В начале файла, после импортов
-import os
 import sys
 
-import os
 from yookassa import Configuration, Payment
 
-import asyncio
 import threading
-
-import asyncio
-from yookassa import Payment
 
 def get_admin_ids():
     """
@@ -537,45 +531,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def create_yookassa_payment(amount, description, order_id):
     """Создание платежа в ЮKassa"""
     try:
-        payment = Payment.create({
-            "amount": {
-                "value": f"{amount:.2f}",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/your_bot"
-            },
-            "capture": True,
-            "description": description,
-            "metadata": {
-                "order_id": order_id,
-                "user_id": order_id.split('_')[0]  # ID пользователя
-            }
-        })
+        print(f"✅ DEBUG: Создание реального платежа ЮKassa")
+        print(f"   Shop ID: {Configuration.account_id}")
+        print(f"   Secret Key: {'***' + Configuration.secret_key[-4:] if Configuration.secret_key else 'Нет'}")
         
-        print(f"✅ Платеж создан: {payment.id}")
-        return payment
-        
-    except Exception as e:
-        print(f"❌ Ошибка создания платежа: {e}")
-        return None
-
-async def create_yookassa_payment(amount, description, order_id):
-    """Создание платежа в ЮKassa"""
-    try:
-        print(f"✅ DEBUG create_yookassa_payment: Создание платежа")
-        print(f"   Amount: {amount}")
-        print(f"   Description: {description}")
-        print(f"   Order ID: {order_id}")
-        print(f"   YOOKASSA_SHOP_ID: {YOOKASSA_SHOP_ID}")
-        print(f"   YOOKASSA_SECRET_KEY set: {'Да' if YOOKASSA_SECRET_KEY else 'Нет'}")
-        
-        if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
-            print("❌ ЮKassa не настроена - отсутствуют учетные данные")
-            return None
+        # Проверяем настройку
+        if not Configuration.account_id or not Configuration.secret_key:
+            print("❌ ЮKassa не настроена!")
+            Configuration.account_id = YOOKASSA_SHOP_ID
+            Configuration.secret_key = YOOKASSA_SECRET_KEY
             
-        payment = Payment.create({
+        # Создаем платеж
+        payment_dict = {
             "amount": {
                 "value": f"{amount:.2f}",
                 "currency": "RUB"
@@ -585,20 +552,25 @@ async def create_yookassa_payment(amount, description, order_id):
                 "return_url": "https://t.me/your_bot"
             },
             "capture": True,
-            "description": description,
+            "description": description[:128],  # Обрезаем до 128 символов
             "metadata": {
                 "order_id": order_id,
-                "user_id": order_id.split('_')[0]  # ID пользователя
+                "user_id": order_id.split('_')[0]
             }
-        })
+        }
         
+        print(f"✅ DEBUG: Данные для Payment.create: {payment_dict}")
+        
+        payment = Payment.create(payment_dict)
         print(f"✅ Платеж создан: {payment.id}")
         print(f"   Confirmation URL: {payment.confirmation.confirmation_url}")
         return payment
         
     except Exception as e:
-        print(f"❌ Ошибка создания платежа: {e}")
+        print(f"❌ Ошибка создания платежа ЮKassa: {e}")
+        print(f"   Тип ошибки: {type(e).__name__}")
         import traceback
+        print("Трассировка:")
         traceback.print_exc()
         return None
 
@@ -2388,6 +2360,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
