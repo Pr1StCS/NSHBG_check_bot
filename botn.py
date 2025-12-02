@@ -533,7 +533,6 @@ async def create_yookassa_payment(amount, description, order_id):
     try:
         print(f"✅ DEBUG: Создание реального платежа ЮKassa")
         print(f"   Shop ID: {Configuration.account_id}")
-        print(f"   Secret Key: {'***' + Configuration.secret_key[-4:] if Configuration.secret_key else 'Нет'}")
         
         # Проверяем настройку
         if not Configuration.account_id or not Configuration.secret_key:
@@ -559,15 +558,21 @@ async def create_yookassa_payment(amount, description, order_id):
             }
         }
         
-        print(f"✅ DEBUG: Данные для Payment.create: {payment_dict}")
-        
+        print(f"✅ DEBUG: Вызов Payment.create()...")
         payment = Payment.create(payment_dict)
-        print(f"✅ Платеж создан: {payment.id}")
-        print(f"   Confirmation URL: {payment.confirmation.confirmation_url}")
+        print(f"✅ DEBUG: Payment.create() успешно выполнен")
+        print(f"   Payment ID: {payment.id}")
+        print(f"   Payment type: {type(payment)}")
+        print(f"   Has confirmation: {hasattr(payment, 'confirmation')}")
+        
+        if hasattr(payment, 'confirmation'):
+            print(f"   Confirmation type: {payment.confirmation.type}")
+            print(f"   Confirmation URL: {payment.confirmation.confirmation_url}")
+        
         return payment
         
     except Exception as e:
-        print(f"❌ Ошибка создания платежа ЮKassa: {e}")
+        print(f"❌ DEBUG: Исключение в create_yookassa_payment: {e}")
         print(f"   Тип ошибки: {type(e).__name__}")
         import traceback
         print("Трассировка:")
@@ -753,58 +758,135 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка платежа через ЮKassa"""
-    user_data = context.user_data
+    print(f"✅ DEBUG: Начало process_payment")
     
-    amount = user_data['price'] * user_data['quantity']
-    description = f"Билеты: {user_data['event']} - {user_data['category']}"
-    order_id = f"{update.message.from_user.id}_{int(datetime.datetime.now().timestamp())}"
-    
-    # Создаем платеж в ЮKassa
-    payment = await create_yookassa_payment(amount, description, order_id)
-    
-    if payment and payment.confirmation.confirmation_url:
-        # Сохраняем заказ как "ожидает оплаты" с payment_id
-        order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        user = update.message.from_user
+    try:
+        user_data = context.user_data
         
-        # Обязательно инициализируем файл
-        init_orders_file()
+        amount = user_data['price'] * user_data['quantity']
+        description = f"Билеты: {user_data['event']} - {user_data['category']}"
+        order_id = f"{update.message.from_user.id}_{int(datetime.datetime.now().timestamp())}"
         
-        with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                order_date, user.id, user.first_name, 
-                user_data['event'], user_data['category'], 
-                user_data['quantity'], amount, order_id, 
-                "pending", payment.id  # Сохраняем payment_id
-            ])
+        print(f"✅ DEBUG: Данные для платежа:")
+        print(f"   Amount: {amount}")
+        print(f"   Event: {user_data['event']}")
+        print(f"   Category: {user_data['category']}")
+        print(f"   Quantity: {user_data['quantity']}")
         
-        print(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
+        # Создаем платеж в ЮKassa
+        print(f"✅ DEBUG: Вызов create_yookassa_payment")
+        payment = await create_yookassa_payment(amount, description, order_id)
+        print(f"✅ DEBUG: create_yookassa_payment вернула: {payment}")
+        print(f"✅ DEBUG: Тип payment: {type(payment)}")
         
-        # Отправляем ссылку для оплаты
-        await update.message.reply_text(
-            f"💳 *Для завершения заказа необходимо оплатить:*\n\n"
-            f"💰 Сумма: {amount} руб.\n"
-            f"🎭 Мероприятие: {user_data['event']}\n"
-            f"🎟️ Категория: {user_data['category']}\n"
-            f"🔢 Количество: {user_data['quantity']}\n\n"
-            f"[💳 **ОПЛАТИТЬ {amount} РУБ.**]({payment.confirmation.confirmation_url})\n\n"
-            f"✅ После оплаты билет придет автоматически в течение 1-2 минут.",
-            parse_mode='Markdown',
-            reply_markup=ReplyKeyboardRemove(),
-            disable_web_page_preview=True
-        )
+        if payment:
+            print(f"✅ DEBUG: Payment object attributes:")
+            print(f"   payment.id: {payment.id if hasattr(payment, 'id') else 'НЕТ'}")
+            print(f"   payment.confirmation: {hasattr(payment, 'confirmation')}")
+            if hasattr(payment, 'confirmation'):
+                print(f"   payment.confirmation.type: {payment.confirmation.type if hasattr(payment.confirmation, 'type') else 'НЕТ'}")
+                print(f"   payment.confirmation.confirmation_url: {payment.confirmation.confirmation_url if hasattr(payment.confirmation, 'confirmation_url') else 'НЕТ'}")
+        else:
+            print(f"❌ DEBUG: payment is None!")
         
-        # Запускаем проверку статуса этого платежа
-        asyncio.create_task(check_single_payment(payment.id, order_id, user.id))
+        if payment and hasattr(payment, 'confirmation') and hasattr(payment.confirmation, 'confirmation_url') and payment.confirmation.confirmation_url:
+            print(f"✅ DEBUG: Платеж создан успешно, URL: {payment.confirmation.confirmation_url}")
+            
+            # Сохраняем заказ как "ожидает оплаты" с payment_id
+            order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            user = update.message.from_user
+            
+            print(f"✅ DEBUG: Сохранение заказа в CSV...")
+            
+            # Обязательно инициализируем файл
+            init_orders_file()
+            
+            # Проверяем существование файла
+            print(f"✅ DEBUG: ORDERS_FILE путь: {ORDERS_FILE}")
+            print(f"✅ DEBUG: Файл существует: {os.path.exists(ORDERS_FILE)}")
+            
+            try:
+                with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([
+                        order_date, user.id, user.first_name, 
+                        user_data['event'], user_data['category'], 
+                        user_data['quantity'], amount, order_id, 
+                        "pending", payment.id  # Сохраняем payment_id
+                    ])
+                print(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
+            except Exception as e:
+                print(f"❌ DEBUG: Ошибка при сохранении в CSV: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            print(f"✅ DEBUG: Отправка сообщения пользователю...")
+            
+            try:
+                # Отправляем ссылку для оплаты
+                await update.message.reply_text(
+                    f"💳 *Для завершения заказа необходимо оплатить:*\n\n"
+                    f"💰 Сумма: {amount} руб.\n"
+                    f"🎭 Мероприятие: {user_data['event']}\n"
+                    f"🎟️ Категория: {user_data['category']}\n"
+                    f"🔢 Количество: {user_data['quantity']}\n\n"
+                    f"[💳 **ОПЛАТИТЬ {amount} РУБ.**]({payment.confirmation.confirmation_url})\n\n"
+                    f"✅ После оплаты билет придет автоматически в течение 1-2 минут.",
+                    parse_mode='Markdown',
+                    reply_markup=ReplyKeyboardRemove(),
+                    disable_web_page_preview=True
+                )
+                print(f"✅ DEBUG: Сообщение отправлено пользователю")
+            except Exception as e:
+                print(f"❌ DEBUG: Ошибка при отправке сообщения: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            print(f"✅ DEBUG: Создание задачи проверки платежа...")
+            
+            try:
+                # Запускаем проверку статуса этого платежа
+                asyncio.create_task(check_single_payment(payment.id, order_id, user.id))
+                print(f"✅ DEBUG: Задача проверки платежа создана")
+            except Exception as e:
+                print(f"❌ DEBUG: Ошибка при создании задачи: {e}")
+                import traceback
+                traceback.print_exc()
+            
+        else:
+            print(f"❌ DEBUG: Платеж не создан или нет confirmation_url")
+            print(f"   payment: {payment}")
+            if payment:
+                print(f"   has confirmation: {hasattr(payment, 'confirmation')}")
+                if hasattr(payment, 'confirmation'):
+                    print(f"   confirmation_url exists: {hasattr(payment.confirmation, 'confirmation_url')}")
+            
+            try:
+                await update.message.reply_text(
+                    "❌ Ошибка при создании платежа. Попробуйте позже.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                print(f"✅ DEBUG: Сообщение об ошибке отправлено")
+            except Exception as e:
+                print(f"❌ DEBUG: Ошибка при отправке сообщения об ошибке: {e}")
         
-    else:
-        await update.message.reply_text(
-            "❌ Ошибка при создании платежа. Попробуйте позже.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    
-    return ConversationHandler.END
+        print(f"✅ DEBUG: Конец process_payment, возвращаем ConversationHandler.END")
+        return ConversationHandler.END
+        
+    except Exception as e:
+        print(f"❌ DEBUG: Исключение в process_payment: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            await update.message.reply_text(
+                "❌ Произошла непредвиденная ошибка. Попробуйте позже.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except:
+            pass
+            
+        return ConversationHandler.END
 
 async def process_payment_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка шага оплаты"""
@@ -2360,6 +2442,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
