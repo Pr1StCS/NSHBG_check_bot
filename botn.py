@@ -779,6 +779,61 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
+async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка платежа через ЮKassa"""
+    user_data = context.user_data
+    
+    amount = user_data['price'] * user_data['quantity']
+    description = f"Билеты: {user_data['event']} - {user_data['category']}"
+    order_id = f"{update.message.from_user.id}_{int(datetime.datetime.now().timestamp())}"
+    
+    # Создаем платеж в ЮKassa
+    payment = await create_yookassa_payment(amount, description, order_id)
+    
+    if payment and payment.confirmation.confirmation_url:
+        # Сохраняем заказ как "ожидает оплаты" с payment_id
+        order_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user = update.message.from_user
+        
+        # Обязательно инициализируем файл
+        init_orders_file()
+        
+        with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                order_date, user.id, user.first_name, 
+                user_data['event'], user_data['category'], 
+                user_data['quantity'], amount, order_id, 
+                "pending", payment.id  # Сохраняем payment_id
+            ])
+        
+        print(f"✅ Заказ сохранен: {order_id}, Payment ID: {payment.id}")
+        
+        # Отправляем ссылку для оплаты
+        await update.message.reply_text(
+            f"💳 *Для завершения заказа необходимо оплатить:*\n\n"
+            f"💰 Сумма: {amount} руб.\n"
+            f"🎭 Мероприятие: {user_data['event']}\n"
+            f"🎟️ Категория: {user_data['category']}\n"
+            f"🔢 Количество: {user_data['quantity']}\n\n"
+            f"[💳 **ОПЛАТИТЬ {amount} РУБ.**]({payment.confirmation.confirmation_url})\n\n"
+            f"✅ После оплаты билет придет автоматически в течение 1-2 минут.",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove(),
+            disable_web_page_preview=True
+        )
+        
+        # Запускаем проверку статуса этого платежа
+        asyncio.create_task(check_single_payment(payment.id, order_id, user.id))
+        
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при создании платежа. Попробуйте позже.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    return ConversationHandler.END
+
 async def process_payment_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка шага оплаты"""
     choice = update.message.text
@@ -2333,6 +2388,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
