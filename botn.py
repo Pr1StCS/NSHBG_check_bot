@@ -563,11 +563,15 @@ async def create_yookassa_payment(amount, description, order_id):
 
 async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка платежа через ЮKassa"""
+    print(f"DEBUG: Начало process_payment")
+    
     user_data = context.user_data
     
     amount = user_data['price'] * user_data['quantity']
     description = f"Билеты: {user_data['event']} - {user_data['category']}"
     order_id = f"{update.message.from_user.id}_{int(datetime.datetime.now().timestamp())}"
+    
+    print(f"DEBUG: Создание платежа: сумма={amount}, описание={description}, order_id={order_id}")
     
     # Создаем платеж в ЮKassa
     payment = await create_yookassa_payment(amount, description, order_id)
@@ -609,11 +613,13 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(check_single_payment(payment.id, order_id, user.id))
         
     else:
+        print(f"DEBUG: Ошибка создания платежа")
         await update.message.reply_text(
             "❌ Ошибка при создании платежа. Попробуйте позже.",
             reply_markup=ReplyKeyboardRemove()
         )
     
+    print(f"DEBUG: Конец process_payment")
     return ConversationHandler.END
 
 async def check_single_payment(payment_id, order_id, user_id):
@@ -2337,6 +2343,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
