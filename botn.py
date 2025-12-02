@@ -17,6 +17,11 @@ from yookassa import Configuration, Payment
 
 import threading
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor(max_workers=3)
+
 def get_admin_ids():
     """
     Безопасно получает список ADMIN_IDS из переменных окружения
@@ -529,7 +534,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECTING_EVENT
 
 async def create_yookassa_payment(amount, description, order_id):
-    """Создание платежа в ЮKassa"""
+    """Создание платежа в ЮKassa с использованием ThreadPoolExecutor"""
     try:
         print(f"✅ DEBUG: Создание реального платежа ЮKassa")
         print(f"   Shop ID: {Configuration.account_id}")
@@ -539,41 +544,37 @@ async def create_yookassa_payment(amount, description, order_id):
             print("❌ ЮKassa не настроена!")
             Configuration.account_id = YOOKASSA_SHOP_ID
             Configuration.secret_key = YOOKASSA_SECRET_KEY
-            
-        # Создаем платеж
-        payment_dict = {
-            "amount": {
-                "value": f"{amount:.2f}",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/your_bot"
-            },
-            "capture": True,
-            "description": description[:128],  # Обрезаем до 128 символов
-            "metadata": {
-                "order_id": order_id,
-                "user_id": order_id.split('_')[0]
-            }
-        }
         
-        print(f"✅ DEBUG: Вызов Payment.create()...")
-        payment = Payment.create(payment_dict)
+        # Создаем платеж в отдельном потоке, т.к. yookassa может блокировать
+        loop = asyncio.get_event_loop()
+        payment = await loop.run_in_executor(
+            executor,
+            lambda: Payment.create({
+                "amount": {
+                    "value": f"{amount:.2f}",
+                    "currency": "RUB"
+                },
+                "confirmation": {
+                    "type": "redirect",
+                    "return_url": "https://t.me/NSHBG_NCH_Ticket_bot"
+                },
+                "capture": True,
+                "description": description[:128],
+                "metadata": {
+                    "order_id": order_id,
+                    "user_id": order_id.split('_')[0]
+                }
+            })
+        )
+        
         print(f"✅ DEBUG: Payment.create() успешно выполнен")
         print(f"   Payment ID: {payment.id}")
-        print(f"   Payment type: {type(payment)}")
-        print(f"   Has confirmation: {hasattr(payment, 'confirmation')}")
-        
-        if hasattr(payment, 'confirmation'):
-            print(f"   Confirmation type: {payment.confirmation.type}")
-            print(f"   Confirmation URL: {payment.confirmation.confirmation_url}")
+        print(f"   Confirmation URL: {payment.confirmation.confirmation_url}")
         
         return payment
         
     except Exception as e:
         print(f"❌ DEBUG: Исключение в create_yookassa_payment: {e}")
-        print(f"   Тип ошибки: {type(e).__name__}")
         import traceback
         print("Трассировка:")
         traceback.print_exc()
@@ -2442,6 +2443,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
