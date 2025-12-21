@@ -72,6 +72,64 @@ ADMIN_IDS = get_admin_ids()
 import pandas as pd
 from datetime import datetime
 
+def read_yookassa_csv():
+    """Читает CSV ЮKassa с разделителем ;"""
+    csv_path = "all-payments.csv"
+    
+    if not os.path.exists(csv_path):
+        return None, "Файл не найден"
+    
+    try:
+        with open(csv_path, 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+        
+        # Разбиваем на строки
+        lines = content.strip().split('\n')
+        
+        if not lines:
+            return None, "Файл пустой"
+        
+        # Первая строка - заголовки
+        headers = lines[0].split(';')
+        print(f"📋 Заголовки ({len(headers)}): {headers}")
+        
+        # Парсим данные
+        payments = []
+        for line in lines[1:]:  # Пропускаем заголовки
+            if not line.strip():
+                continue
+                
+            values = line.split(';')
+            payment = {}
+            
+            # Сопоставляем значения с заголовками
+            for i, header in enumerate(headers):
+                if i < len(values):
+                    payment[header] = values[i]
+                else:
+                    payment[header] = ""
+            
+            payments.append(payment)
+        
+        print(f"✅ Прочитано {len(payments)} платежей")
+        
+        # Проверяем статусы
+        status_counts = {}
+        for payment in payments:
+            status = payment.get('Статус платежа', '').strip()
+            if status:
+                status_counts[status] = status_counts.get(status, 0) + 1
+        
+        print(f"🎯 Статусы платежей: {status_counts}")
+        
+        return payments, None
+        
+    except Exception as e:
+        print(f"❌ Ошибка чтения CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, str(e)
+
 def check_ticket_via_yookassa(qr_data: str):
     """
     Проверяет билет напрямую по CSV ЮKassa
@@ -2386,6 +2444,100 @@ async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE,
             amount_num = float(amount)
             if amount_num in [600, 700]:
                 category = "Стандарт"
+async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
+    """Проверка билета с корректным чтением CSV"""
+    
+    print(f"🔍 Проверка QR: {qr_data}")
+    
+    # Читаем CSV
+    payments, error = read_yookassa_csv()
+    
+    if error:
+        await update.message.reply_text(f"❌ Ошибка чтения базы: {error}")
+        return ConversationHandler.END
+    
+    if not payments:
+        await update.message.reply_text("❌ В базе нет данных")
+        return ConversationHandler.END
+    
+    # Фильтруем оплаченные
+    paid_payments = []
+    for payment in payments:
+        status = payment.get('Статус платежа', '').strip()
+        # Проверяем разные варианты написания
+        if status in ['Оплачен', 'оплачен', 'Оплачено']:
+            paid_payments.append(payment)
+    
+    print(f"💰 Найдено оплаченных: {len(paid_payments)} из {len(payments)}")
+    
+    if not paid_payments:
+        # Показываем какие статусы есть
+        all_statuses = {}
+        for payment in payments:
+            status = payment.get('Статус платежа', '').strip()
+            if status:
+                all_statuses[status] = all_statuses.get(status, 0) + 1
+        
+        status_info = "\n".join([f"• {status}: {count}" for status, count in all_statuses.items()])
+        
+        await update.message.reply_text(
+            f"❌ Не найдено платежей со статусом 'Оплачен'\n\n"
+            f"📊 Статусы в файле:\n{status_info}\n\n"
+            f"Проверьте правильность статусов в CSV файле."
+        )
+        return ConversationHandler.END
+    
+    # Ищем QR в оплаченных платежах
+    print(f"🔍 Ищем QR в {len(paid_payments)} оплаченных платежах...")
+    
+    found_payment = None
+    search_method = ""
+    
+    # Способ 1: По payment_id
+    for payment in paid_payments:
+        payment_id = payment.get('Идентификатор платежа', '').strip()
+        if payment_id and payment_id == qr_data:
+            found_payment = payment
+            search_method = f"по ID платежа: {payment_id[:15]}..."
+            break
+    
+    # Способ 2: По номеру счета
+    if not found_payment:
+        for payment in paid_payments:
+            invoice = payment.get('Номер счёта', '').strip()
+            if invoice and invoice == qr_data:
+                found_payment = payment
+                search_method = f"по номеру счета: {invoice[:15]}..."
+                break
+    
+    # Способ 3: По RRN
+    if not found_payment:
+        for payment in paid_payments:
+            rrn = payment.get('RRN операции', '').strip()
+            if rrn and rrn == qr_data:
+                found_payment = payment
+                search_method = f"по RRN: {rrn}"
+                break
+    
+    # Способ 4: Частичное совпадение
+    if not found_payment:
+        for payment in paid_payments:
+            payment_id = payment.get('Идентификатор платежа', '').strip()
+            if payment_id and qr_data in payment_id:
+                found_payment = payment
+                search_method = f"по части ID: {payment_id[:20]}..."
+                break
+    
+    if found_payment:
+        # Получаем данные
+        amount = found_payment.get('Сумма платежа', '0')
+        date = found_payment.get('Дата платежа', found_payment.get('Дата создания заказа в ЮKassa', 'Неизвестно'))
+        payment_id = found_payment.get('Идентификатор платежа', 'Без ID')
+        
+        try:
+            amount_num = float(amount.replace(',', '.'))
+            if amount_num in [600, 700]:
+                category = "Стандарт"
                 quantity = 1
             elif amount_num in [1200, 1400]:
                 category = "VIP"
@@ -2404,44 +2556,48 @@ async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE,
             quantity = 1
         
         response = f"""
-✅ *Билет подтвержден!*
+✅ *БИЛЕТ ПОДТВЕРЖДЕН!*
 
-🎭 Мероприятие: Отчётный концерт
+🎭 Мероприятие: Отчётный концерт Не Школы Гитары и Барабанов
 💵 Сумма: {amount} руб.
 🎟️ Категория: {category}
-🔢 Билетов: {quantity}
-📅 Дата: {date}
-🆔 ID: {payment_id[:20]}...
+🔢 Количество: {quantity} шт.
+📅 Дата оплаты: {date}
+🔍 Найден: {search_method}
         
 ✅ Вход разрешен!
         """
         
     else:
-        # QR не найден, показываем что есть
-        sample_payments = "\n".join([
-            f"• {p.get('Дата платежа', '??')} - {p.get('Сумма платежа', '??')} руб. - {p.get('Идентификатор платежа', '??')[:15]}..."
-            for p in paid_payments[:5]
-        ])
+        # QR не найден, показываем доступные payment_id
+        sample_ids = []
+        for payment in paid_payments[:5]:
+            pid = payment.get('Идентификатор платежа', '').strip()
+            amt = payment.get('Сумма платежа', '0')
+            if pid:
+                sample_ids.append(f"• `{pid[:20]}...` - {amt} руб.")
+        
+        sample_text = "\n".join(sample_ids) if sample_ids else "Нет примеров"
         
         response = f"""
 ❌ *QR не найден в базе*
 
 Ваш QR: `{qr_data}`
         
-📊 *В базе есть платежи:*
-{sample_payments}
+📊 *Примеры payment_id из базы:*
+{sample_text}
         
 Всего оплаченных платежей: {len(paid_payments)}
         
-**Возможные причины:**
-1. QR содержит старый ID
-2. Платеж не в базе
-3. Необходима ручная проверка
+**Ваш QR содержит старый формат `userid_timestamp`**
+Чтобы он работал, нужно:
+1. Найти payment_id из CSV
+2. Создать связь вручную
         """
     
     await update.message.reply_text(response, parse_mode='Markdown')
     return ConversationHandler.END
-
+    
 async def mark_ticket_as_used_in_local(qr_data: str, ticket_info: dict):
     """Помечает билет как использованный в локальной базе"""
     try:
@@ -2734,6 +2890,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
