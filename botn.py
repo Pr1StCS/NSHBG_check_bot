@@ -2299,52 +2299,6 @@ seek(0)
                             row_dict = {}
                             for j, value in enumerate(row):
                                 if j < len(headers):
-                                    row_dict[headers[j]] = value
-                        else:
-                            row_dict = row
-                        
-                        all_payments.append(row_dict)
-                        
-                        if i < 3:  # Показываем первые 3 платежа
-                            print(f"  Платеж {i+1}: {row_dict}")
-                    
-                    print(f"✅ Успешно прочитано {len(all_payments)} платежей")
-                    break  # Успешно прочитали
-                    
-        except Exception as e:
-            print(f"❌ Ошибка с кодировкой {encoding}: {e}")
-            continue
-    
-    if not all_payments:
-        await update.message.reply_text("❌ Не удалось прочитать файл с платежами")
-        return ConversationHandler.END
-    
-    # Анализируем структуру данных
-    print(f"📊 Всего записей: {len(all_payments)}")
-    
-    # Показываем какие статусы есть
-    statuses = {}
-    for payment in all_payments[:10]:  # Первые 10
-        # Пробуем разные возможные названия колонки статуса
-        status_keys = ['Статус платежа', 'Статус', 'status', 'Payment Status']
-        
-        for key in status_keys:
-            if key in payment and payment[key]:
-                status = payment[key].strip()
-                statuses[status] = statuses.get(status, 0) + 1
-                break
-    
-    print(f"🎯 Найденные статусы: {statuses}")
-    
-    # Ищем оплаченные платежи
-    paid_payments = []
-    
-    for payment in all_payments:
-        # Проверяем все возможные названия для статуса
-        possible_status_keys = ['Статус платежа', 'Статус', 'status', 'Payment Status', 'Состояние']
-        
-        for key in possible_status_keys:
-            if key in payment:
 
 async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
     """Проверка билета с корректным чтением CSV"""
@@ -2792,6 +2746,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
