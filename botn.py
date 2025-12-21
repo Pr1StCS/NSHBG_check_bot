@@ -2290,46 +2290,7 @@ async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
 
-async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
-    """Упрощенная проверка с отладкой"""
-    
-    print(f"🔍 Начало проверки QR: {qr_data}")
-    
-    # Проверяем доступность файла
-    csv_path = "all-payments.csv"
-    if not os.path.exists(csv_path):
-        print(f"❌ Файл не найден: {csv_path}")
-        await update.message.reply_text("❌ Файл с платежами не найден")
-        return ConversationHandler.END
-    
-    print(f"✅ Файл найден, размер: {os.path.getsize(csv_path)} байт")
-    
-    # Пробуем разные кодировки
-    encodings = ['utf-8-sig', 'utf-8', 'cp1251', 'windows-1251']
-    
-    all_payments = []
-    
-    for encoding in encodings:
-        try:
-            with open(csv_path, 'r', encoding=encoding) as file:
-                # Сначала читаем как текст чтобы понять структуру
-                first_lines = [file.readline() for _ in range(3)]
-                print(f"📄 Первые строки ({encoding}):")
-                for i, line in enumerate(first_lines):
-                    print(f"  {i+1}: {line[:100]}...")
-                
-                # Возвращаемся к началу
-                file.seek(0)
-                
-                # Пробуем прочитать как CSV
-                import csv
-                reader = csv.reader(file)
-                headers = next(reader, None)
-                print(f"📋 Заголовки ({encoding}): {headers}")
-                
-                if headers:
-                    # Читаем все строки
-                    file.seek(0)
+seek(0)
                     dict_reader = csv.DictReader(file)
                     
                     for i, row in enumerate(dict_reader):
@@ -2384,66 +2345,7 @@ async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE,
         
         for key in possible_status_keys:
             if key in payment:
-                status_value = str(payment[key]).strip().lower()
-                # Проверяем разные варианты написания "оплачен"
-                if any(paid_word in status_value for paid_word in ['оплачен', 'оплачено', 'успешно', 'succeeded', 'success']):
-                    paid_payments.append(payment)
-                    break
-        
-        # Если не нашли по статусу, проверяем сумму (если сумма > 0, считаем оплаченным)
-        if 'Сумма платежа' in payment and payment['Сумма платежа']:
-            try:
-                amount = float(payment['Сумма платежа'])
-                if amount > 0 and payment not in paid_payments:
-                    paid_payments.append(payment)
-            except:
-                pass
-    
-    print(f"💰 Найдено оплаченных платежей: {len(paid_payments)}")
-    
-    if not paid_payments:
-        # Показываем что есть в файле
-        sample_info = "Примеры записей в файле:\n"
-        for i, payment in enumerate(all_payments[:3]):
-            sample_info += f"\n{i+1}. "
-            for key, value in list(payment.items())[:3]:  # Первые 3 поля
-                sample_info += f"{key}: {value[:30]}... | "
-        
-        await update.message.reply_text(
-            f"❌ Не найдено оплаченных платежей\n\n"
-            f"📊 Всего записей: {len(all_payments)}\n"
-            f"{sample_info}"
-        )
-        return ConversationHandler.END
-    
-    # Теперь ищем по QR
-    print(f"🔍 Ищем QR '{qr_data}' в {len(paid_payments)} оплаченных платежах...")
-    
-    # Пробуем разные поля для поиска
-    found_payments = []
-    
-    for payment in paid_payments:
-        # Проверяем все текстовые поля
-        for key, value in payment.items():
-            if value and qr_data in str(value):
-                print(f"✅ Найдено в поле '{key}': {value}")
-                found_payments.append(payment)
-                break
-    
-    if found_payments:
-        # Берем первый найденный
-        payment = found_payments[0]
-        
-        # Получаем данные
-        amount = payment.get('Сумма платежа', 0)
-        date = payment.get('Дата платежа', 'Неизвестно')
-        payment_id = payment.get('Идентификатор платежа', 'Без ID')
-        
-        # Определяем категорию
-        try:
-            amount_num = float(amount)
-            if amount_num in [600, 700]:
-                category = "Стандарт"
+
 async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
     """Проверка билета с корректным чтением CSV"""
     
@@ -2890,6 +2792,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
