@@ -69,6 +69,123 @@ def is_admin(user_id):
 # Инициализируем ADMIN_IDS при запуске
 ADMIN_IDS = get_admin_ids()
 
+import pandas as pd
+from datetime import datetime
+
+def check_ticket_via_yookassa(qr_data: str):
+    """
+    Проверяет билет напрямую по CSV ЮKassa
+    QR может содержать разные данные - нужно искать разными способами
+    """
+    try:
+        # Загружаем CSV ЮKassa
+        csv_path = "all-payments.csv"
+        if not os.path.exists(csv_path):
+            print(f"❌ Файл {csv_path} не найден")
+            return False, None, "Файл с платежами не найден"
+        
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')
+        
+        # Способ 1: Ищем по номеру счета (скорее всего QR содержит это)
+        # Номер счета в CSV: "019b3fba-b5b6-794c-861c-623f2c8d4716"
+        for _, row in df.iterrows():
+            invoice_number = str(row.get('Номер счёта', '')).strip()
+            if invoice_number and invoice_number == qr_data:
+                return process_yookassa_row(row, "по номеру счета")
+        
+        # Способ 2: Ищем по идентификатору платежа
+        for _, row in df.iterrows():
+            payment_id = str(row.get('Идентификатор платежа', '')).strip()
+            if payment_id and payment_id == qr_data:
+                return process_yookassa_row(row, "по ID платежа")
+        
+        # Способ 3: Ищем по короткому ID (первые 8 символов)
+        for _, row in df.iterrows():
+            payment_id = str(row.get('Идентификатор платежа', '')).strip()
+            if payment_id and len(payment_id) >= 8 and payment_id[:8] == qr_data:
+                return process_yookassa_row(row, "по короткому ID")
+        
+        # Способ 4: Ищем по RRN операции
+        for _, row in df.iterrows():
+            rrn = str(row.get('RRN операции', '')).strip()
+            if rrn and rrn == qr_data:
+                return process_yookassa_row(row, "по RRN операции")
+        
+        # Способ 5: QR может содержать URL с параметром
+        if "start=check_" in qr_data:
+            # Извлекаем order_id из URL: https://t.me/bot?start=check_ORDER_ID
+            order_id = qr_data.split("start=check_")[-1].split('&')[0].split('?')[0]
+            print(f"🔍 Извлечен order_id из URL: {order_id}")
+            
+            # Пробуем найти в CSV разными способами
+            for _, row in df.iterrows():
+                # Проверяем разные поля
+                invoice_number = str(row.get('Номер счёта', '')).strip()
+                payment_id = str(row.get('Идентификатор платежа', '')).strip()
+                
+                if invoice_number and invoice_number == order_id:
+                    return process_yookassa_row(row, "из URL по номеру счета")
+                elif payment_id and payment_id == order_id:
+                    return process_yookassa_row(row, "из URL по ID платежа")
+                elif payment_id and len(payment_id) >= 8 and payment_id[:8] == order_id:
+                    return process_yookassa_row(row, "из URL по короткому ID")
+        
+        return False, None, "Билет не найден в базе ЮKassa"
+        
+    except Exception as e:
+        print(f"❌ Ошибка проверки билета: {e}")
+        return False, None, f"Ошибка проверки: {str(e)}"
+
+def process_yookassa_row(row, found_by: str):
+    """Обрабатывает найденную запись из ЮKassa"""
+    status = str(row.get('Статус платежа', '')).strip()
+    amount = float(row.get('Сумма платежа', 0))
+    description = str(row.get('Описание заказа', ''))
+    payment_date = str(row.get('Дата платежа', ''))
+    payment_id = str(row.get('Идентификатор платежа', '')).strip()
+    
+    # Определяем мероприятие
+    if "Отчётный концерт Не Школы" in description:
+        event_name = "Отчётный концерт Не Школы Гитары и Барабанов"
+    elif "Не школа гитары" in description.lower():
+        event_name = "Отчётный концерт Не школы гитары и барабанов"
+    else:
+        event_name = description.replace('Билеты: ', '').replace(' - Билет', '')
+    
+    # Определяем категорию по цене
+    if amount == 600 or amount == 700:
+        category = "Стандарт"
+        quantity = 1
+    elif amount == 1200 or amount == 1400:
+        category = "VIP"
+        quantity = 2
+    elif amount == 1800:
+        category = "Премиум"
+        quantity = 3
+    elif amount == 2400:
+        category = "Групповой"
+        quantity = 4
+    else:
+        category = "Стандарт"
+        quantity = 1
+    
+    ticket_info = {
+        'payment_id': payment_id,
+        'event': event_name,
+        'category': category,
+        'quantity': quantity,
+        'amount': amount,
+        'date': payment_date,
+        'status': status,
+        'found_by': found_by,
+        'invoice_number': str(row.get('Номер счёта', '')).strip()
+    }
+    
+    if status == 'Оплачен':
+        return True, ticket_info, f"Найден {found_by}"
+    else:
+        return False, ticket_info, f"Платеж не оплачен (статус: {status})"
+
 async def check_pending_payments():
     """Периодически проверяет статус pending платежей"""
     while True:
@@ -2071,76 +2188,114 @@ async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
 
 async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, order_id: str):
-    """Проверка билета по ID (для использования из QR-кода)"""
-    try:
-        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-        
-        order_found = None
-        for order in orders:
-            if order['ID заказа'] == order_id:
-                order_found = order
-                break
-        
-        if not order_found:
-            await update.message.reply_text("❌ Билет не найден")
-            return ConversationHandler.END
-        
-        status = order_found.get('Статус', 'active')
-        
-        if status == 'used':
-            await update.message.reply_text(
-                f"⚠️ Билет уже использован!\n\n"
-                f"🆔 ID: {order_id}\n"
-                f"👤 Покупатель: {order_found['Имя']}\n"
-                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
-                f"🎟️ Категория: {order_found['Категория']}\n"
-                f"🕒 Дата покупки: {order_found['Дата']}"
-            )
-        elif status == 'active':
-            await mark_ticket_as_used(order_id)
-            
-            await update.message.reply_text(
-                f"✅ Билет подтвержден!\n\n"
-                f"🆔 ID: {order_id}\n"
-                f"👤 Покупатель: {order_found['Имя']}\n"
-                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
-                f"🎟️ Категория: {order_found['Категория']}\n"
-                f"🔢 Количество: {order_found['Количество']} шт.\n"
-                f"💵 Сумма: {order_found['Сумма']} руб.\n\n"
-                f"✅ Билет отмечен как использованный"
-            )
-        else:
-            await update.message.reply_text(f"❌ Неизвестный статус билета: {status}")
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
+    """Проверка билета по ID из QR-кода (работает с ЮKassa CSV)"""
+    print(f"🔍 Проверка билета по QR: {order_id}")
     
+    # Проверяем через CSV ЮKassa
+    success, ticket_info, message = check_ticket_via_yookassa(order_id)
+    
+    if success and ticket_info:
+        # Билет найден и оплачен
+        response = f"""
+✅ *Билет подтвержден!*
+
+🎭 Мероприятие: {ticket_info['event']}
+🎟️ Категория: {ticket_info['category']}
+🔢 Количество: {ticket_info['quantity']} шт.
+💵 Сумма: {ticket_info['amount']} руб.
+📅 Дата оплаты: {ticket_info['date']}
+🔑 Найден: {ticket_info['found_by']}
+🆔 ID платежа: {ticket_info['payment_id'][:12]}...
+        
+✅ Билет действителен!
+        """
+        
+        # Помечаем как использованный в локальной базе (если она есть)
+        await mark_ticket_as_used_in_local(order_id, ticket_info)
+        
+    elif ticket_info:  # Найден но не оплачен
+        response = f"""
+❌ *Платеж не завершен*
+
+🎭 Мероприятие: {ticket_info['event']}
+💵 Сумма: {ticket_info['amount']} руб.
+📅 Дата: {ticket_info['date']}
+⚠️ Статус: {ticket_info['status']}
+        
+❌ Билет недействителен - платеж не завершен.
+        """
+    else:  # Не найден
+        response = f"""
+❌ *Билет не найден*
+
+QR-код: `{order_id}`
+        
+Проверьте правильность QR-кода.
+Если проблема сохраняется, обратитесь к администратору.
+        """
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
     return ConversationHandler.END
 
-async def mark_ticket_as_used(order_id: str):
-    """Помечает билет как использованный"""
+async def mark_ticket_as_used_in_local(qr_data: str, ticket_info: dict):
+    """Помечает билет как использованный в локальной базе"""
     try:
-        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-            fieldnames = reader.fieldnames
+        # Создаем локальную запись если её нет
+        if not os.path.exists(ORDERS_FILE):
+            init_orders_file()
         
-        for order in orders:
-            if order['ID заказа'] == order_id:
-                order['Статус'] = 'used'
-                break
+        # Создаем order_id на основе данных
+        short_id = ticket_info['payment_id'][:8] if ticket_info['payment_id'] else qr_data[:8]
+        order_id = f"yk_{short_id}"
         
-        with open(ORDERS_FILE, 'w', newline='', encoding='utf-8-sig') as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(orders)
-            
+        # Добавляем в локальную базу
+        with open(ORDERS_FILE, 'a', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                ticket_info['date'],
+                '0',  # ID пользователя неизвестен
+                'QR проверка',
+                ticket_info['event'],
+                ticket_info['category'],
+                ticket_info['quantity'],
+                ticket_info['amount'],
+                order_id,
+                'used',  # Помечаем как использованный сразу
+                ticket_info['payment_id'],
+                'checked'
+            ])
+        
+        print(f"✅ Добавлен в локальную базу: {order_id}")
         return True
+        
     except Exception as e:
-        print(f"Ошибка при обновлении статуса билета: {e}")
+        print(f"⚠️ Не удалось добавить в локальную базу: {e}")
         return False
+
+async def check_qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка QR-кода вручную (для админов)"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    if context.args:
+        qr_data = context.args[0]
+        await check_ticket_by_id(update, context, qr_data)
+    else:
+        await update.message.reply_text(
+            "📱 *Проверка QR-кода*\n\n"
+            "Использование: `/check_qr [данные_из_qr]`\n"
+            "Или отправьте QR-код как сообщение",
+            parse_mode='Markdown'
+        )
+
+async def handle_qr_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка QR-кода отправленного как сообщение"""
+    if not is_admin(update.message.from_user.id):
+        return
+    
+    qr_data = update.message.text.strip()
+    await check_ticket_by_id(update, context, qr_data)
 
 async def generate_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Генерация отчетов"""
@@ -2276,9 +2431,21 @@ def main():
     admin_ids = get_admin_ids()
     print(f"✅ Админы: {admin_ids}")
     
+    # Проверяем наличие CSV ЮKassa
+    csv_path = "all-payments.csv"
+    if os.path.exists(csv_path):
+        print(f"✅ Найден CSV ЮKassa: {csv_path}")
+        # Создаем локальную базу из CSV если нужно
+        if not os.path.exists(ORDERS_FILE) or os.path.getsize(ORDERS_FILE) < 100:
+            print("📦 База заказов пустая, создаю из CSV ЮKassa...")
+            create_database_from_yookassa(csv_path)
+    else:
+        print(f"⚠️ CSV ЮKassa не найден: {csv_path}")
+        print("📝 Проверка будет работать только по локальной базе")
+    
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler для покупки билетов (ДОЛЖЕН БЫТЬ ПЕРВЫМ)
+    # ConversationHandler для покупки билетов
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start_command)],
         states={
@@ -2292,23 +2459,35 @@ def main():
     )
     app.add_handler(conv_handler)
     
-    # Обработчик для фото (УПРОЩЕННЫЙ - без фильтра админов)
+    # Обработчик для фото мероприятий
     app.add_handler(MessageHandler(
-        filters.PHOTO,  # ТОЛЬКО фильтр по фото
+        filters.PHOTO,
         handle_photo_upload
     ))
     
-    # Команды
+    # Основные команды
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CommandHandler("events", events_command))
     app.add_handler(CommandHandler("check", check_ticket_command))
+    app.add_handler(CommandHandler("check_qr", check_qr_command))
+    app.add_handler(CommandHandler("sync", sync_command))
+    app.add_handler(CommandHandler("rebuild", rebuild_command))
+    app.add_handler(CommandHandler("import", import_command))
     
-    # Обработчик для админов (УПРОЩЕННЫЙ ФИЛЬТР)
+    # Обработчик для админ-панели
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         admin_handler
+    ))
+    
+    # Обработчик для проверки QR-кодов отправленных как текст (только для админов)
+    # Создаем фильтр для проверки админов
+    admin_filter = filters.User(user_id=admin_ids)
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & admin_filter,
+        handle_qr_message
     ))
     
     # Обработчик ошибок
@@ -2317,8 +2496,26 @@ def main():
     # Запускаем фоновую проверку pending платежей
     asyncio.get_event_loop().create_task(check_pending_payments())
     
+    # Запускаем периодическую синхронизацию с ЮKassa
+async def periodic_sync():
+        while True:
+            await asyncio.sleep(300)  # Каждые 5 минут
+            if os.path.exists("all-payments.csv"):
+                try:
+                    print("🔄 Периодическая синхронизация с ЮKassa...")
+                    await sync_yookassa_payments("all-payments.csv")
+                except Exception as e:
+                    print(f"❌ Ошибка синхронизации: {e}")
+    
+    asyncio.get_event_loop().create_task(periodic_sync())
+    
     print("=== БОТ ЗАПУЩЕН ===")
-    app.run_polling()
+    print(f"📊 Путь к файлу заказов: {ORDERS_FILE}")
+    print(f"🎭 Загружено мероприятий: {len(EVENTS)}")
+    print(f"👑 Администраторов: {len(admin_ids)}")
+    print("=" * 30)
+    
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
@@ -2332,6 +2529,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
