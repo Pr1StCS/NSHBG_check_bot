@@ -23,6 +23,19 @@ import threading
 import asyncio
 from yookassa import Payment
 
+# Состояния разговора
+SELECTING_EVENT, SELECTING_CATEGORY, SELECTING_QUANTITY, CONFIRMING = range(4)
+UPLOADING_PHOTO, CONFIRMING_PHOTO = range(4, 6)
+
+# Файлы данных
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ORDERS_FILE = os.path.join(BASE_DIR, "data", "orders.csv")
+EVENTS_FILE = os.path.join(BASE_DIR, "data", "events.json")
+PHOTOS_DIR = os.path.join(BASE_DIR, "event_photos")
+
+# Глобальные переменные
+EVENTS = None
+
 def get_admin_ids():
     """
     Безопасно получает список ADMIN_IDS из переменных окружения
@@ -129,6 +142,247 @@ def read_yookassa_csv():
         import traceback
         traceback.print_exc()
         return None, str(e)
+
+async def show_payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает все платежи из CSV для ручного сопоставления"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    csv_path = "all-payments.csv"
+    if not os.path.exists(csv_path):
+        await update.message.reply_text("❌ CSV файл не найден")
+        return
+    
+    try:
+        with open(csv_path, 'r', encoding='utf-8-sig') as f:
+            lines = f.readlines()
+        
+        if len(lines) < 2:
+            await update.message.reply_text("❌ CSV пустой или содержит только заголовки")
+            return
+        
+        # Парсим CSV с разделителем ;
+        headers = lines[0].strip().split(';')
+        
+        response = "📊 *Все платежи из ЮKassa:*\n\n"
+        
+        for i, line in enumerate(lines[1:], 1):
+            if i > 15:  # Показываем только первые 15
+                response += f"\n... и еще {len(lines) - 16} платежей"
+                break
+            
+            values = line.strip().split(';')
+            
+            # Берем основные поля
+            status = values[3] if len(values) > 3 else "?"
+            amount = values[4] if len(values) > 4 else "?"
+            date = values[1] if len(values) > 1 else "?"
+            payment_id = values[2] if len(values) > 2 else "?"
+            
+            status_icon = "✅" if "Оплачен" in status else "❌"
+            
+            response += f"{i}. {status_icon} {date} - {amount} руб.\n"
+            response += f"   ID: `{payment_id}`\n"
+            
+            if i % 5 == 0:
+                response += "\n"  # Разделитель каждые 5 платежей
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+async def map_qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создает связь между QR и payment_id"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    if len(context.args) != 2:
+        await update.message.reply_text(
+            "Использование: /map_qr [старый_qr] [payment_id]\n\n"
+            "Пример: `/map_qr 1415380850_1762347731 30d9b017-000f-5000-b000-1f99a63fda59`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    old_qr = context.args[0]
+    payment_id = context.args[1]
+    
+    # Сохраняем mapping в файл
+    mapping_file = "qr_mapping.csv"
+    
+    # Проверяем, есть ли уже такой QR
+    mapping_exists = False
+    if os.path.exists(mapping_file):
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith(old_qr + ','):
+                    mapping_exists = True
+                    break
+    
+    # Добавляем или обновляем
+    mode = 'a' if os.path.exists(mapping_file) else 'w'
+    with open(mapping_file, mode, encoding='utf-8') as f:
+        if mode == 'w':
+            f.write("old_qr,payment_id,added_date\n")
+        
+        if not mapping_exists:
+            from datetime import datetime
+            f.write(f"{old_qr},{payment_id},{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            await update.message.reply_text(
+                f"✅ Mapping создан!\n"
+                f"QR: `{old_qr}` →\n"
+                f"Payment ID: `{payment_id}`"
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ Этот QR уже есть в mapping. Используйте /show_mapping чтобы посмотреть."
+            )
+
+async def show_mapping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает все созданные связи QR → payment_id"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    mapping_file = "qr_mapping.csv"
+    
+    if not os.path.exists(mapping_file):
+        await update.message.reply_text("❌ Файл mapping не найден")
+        return
+    
+    try:
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        if len(lines) <= 1:
+            await update.message.reply_text("📭 Mapping пустой")
+            return
+        
+        response = "🗺️ *Существующие связи QR → Payment ID:*\n\n"
+        
+        for i, line in enumerate(lines[1:], 1):  # Пропускаем заголовок
+            parts = line.strip().split(',')
+            if len(parts) >= 2:
+                old_qr = parts[0]
+                payment_id = parts[1]
+                date = parts[2] if len(parts) > 2 else ""
+                
+                response += f"{i}. `{old_qr}`\n"
+                response += f"   → `{payment_id[:20]}...`\n"
+                if date:
+                    response += f"   📅 {date}\n"
+                response += "\n"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+def load_qr_mapping():
+    """Загружает mapping из файла"""
+    mapping_file = "qr_mapping.csv"
+    mapping = {}
+    
+    if os.path.exists(mapping_file):
+        try:
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            for line in lines[1:]:  # Пропускаем заголовок
+                parts = line.strip().split(',')
+                if len(parts) >= 2:
+                    old_qr = parts[0]
+                    payment_id = parts[1]
+                    mapping[old_qr] = payment_id
+            
+            print(f"✅ Загружено {len(mapping)} mapping записей")
+        except Exception as e:
+            print(f"❌ Ошибка загрузки mapping: {e}")
+    
+    return mapping
+
+async def check_ticket_with_mapping(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
+    """Проверка билета с использованием mapping"""
+    
+    print(f"🔍 Проверка QR (с mapping): {qr_data}")
+    
+    # Загружаем mapping
+    mapping = load_qr_mapping()
+    
+    # Проверяем, есть ли этот QR в mapping
+    if qr_data in mapping:
+        payment_id = mapping[qr_data]
+        
+        # Ищем этот payment_id в CSV
+        csv_path = "all-payments.csv"
+        if os.path.exists(csv_path):
+            try:
+                with open(csv_path, 'r', encoding='utf-8-sig') as f:
+                    lines = f.readlines()
+                
+                # Ищем payment_id
+                for line in lines:
+                    if payment_id in line:
+                        # Нашли платеж!
+                        values = line.strip().split(';')
+                        if len(values) > 4:
+                            status = values[3]
+                            amount = values[4]
+                            date = values[1] if len(values) > 1 else ""
+                            
+                            if "Оплачен" in status:
+                                response = f"""
+✅ *БИЛЕТ ПОДТВЕРЖДЕН (через mapping)!*
+
+🎫 QR: `{qr_data[:15]}...`
+💰 Сумма: {amount} руб.
+📅 Дата: {date}
+🆔 Payment ID: `{payment_id[:20]}...`
+                                
+✅ Вход разрешен!
+                                """
+                            else:
+                                response = f"""
+❌ *Платеж не оплачен*
+
+Статус: {status}
+Требуется проверка администратора.
+                                """
+                            
+                            await update.message.reply_text(response, parse_mode='Markdown')
+                            return ConversationHandler.END
+                
+                # Если payment_id не найден
+                await update.message.reply_text(
+                    f"❌ Payment ID `{payment_id}` не найден в CSV"
+                )
+                
+            except Exception as e:
+                await update.message.reply_text(f"❌ Ошибка чтения CSV: {e}")
+        else:
+            await update.message.reply_text("❌ CSV файл не найден")
+    
+    else:
+        # QR нет в mapping, используем старую логику
+        response = f"""
+🎫 *QR не найден в базе mapping*
+
+QR: `{qr_data}`
+        
+**Что делать:**
+1. Используйте `/show_payments` чтобы посмотреть платежи
+2. Найдите подходящий payment_id
+3. Создайте связь: `/map_qr {qr_data} payment_id_из_списка`
+        
+✅ Пока разрешаем вход (ручная проверка)
+        """
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+    
+    return ConversationHandler.END
 
 def check_ticket_via_yookassa(qr_data: str):
     """
@@ -677,6 +931,8 @@ async def generate_qr_code(order_id: str):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда начала работы"""
+    
+    # Проверка QR-кода
     if context.args and context.args[0].startswith('check_'):
         if not is_admin(update.message.from_user.id):
             await update.message.reply_text("❌ Доступ запрещен. Только администраторы могут проверять билеты.")
@@ -687,16 +943,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
         
-        order_id = context.args[0][6:]
-        return await check_ticket_by_id(update, context, order_id)
+        qr_data = context.args[0][6:]  # Убираем 'check_'
+        print(f"🎫 Проверка QR из старта: {qr_data}")
+        
+        # Используем улучшенную проверку с mapping
+        return await check_ticket_with_mapping(update, context, qr_data)
     
+    # Очищаем данные пользователя
     context.user_data.clear()
     
+    # Проверяем есть ли мероприятия
     if not EVENTS:
         await update.message.reply_text("🎭 На данный момент мероприятий нет.")
         return ConversationHandler.END
     
-    # ВЫВОД СПИСКА МЕРОПРИЯТИЙ С ФОТО
+    # Показываем мероприятия с фото
     for event_name, event_data in EVENTS.items():
         event_text = f"🎭 *{event_name}*\n"
         event_text += f"📅 {event_data['date']}\n"
@@ -722,6 +983,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
     
+    # Клавиатура с мероприятиями
     keyboard = [list(EVENTS.keys())]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -2448,19 +2710,17 @@ async def events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("=== ЗАПУСК БОТА ===")
+    
+    # Инициализация
     init_directories()
     update_orders_file()
     
-    # Загружаем мероприятия
+    # Загрузка мероприятий
     global EVENTS
     EVENTS = load_events()
     print(f"✅ Загружено мероприятий: {len(EVENTS)}")
     
-    # Получаем актуальный список админов
-    admin_ids = get_admin_ids()
-    print(f"✅ Админы: {admin_ids}")
-    
-    # Проверяем наличие CSV ЮKassa
+    # Проверка CSV ЮKassa
     csv_path = "all-payments.csv"
     if os.path.exists(csv_path):
         print(f"✅ Найден CSV ЮKassa: {csv_path}")
@@ -2470,11 +2730,20 @@ def main():
             create_database_from_yookassa(csv_path)
     else:
         print(f"⚠️ CSV ЮKassa не найден: {csv_path}")
-        print("📝 Проверка будет работать только по локальной базе")
     
+    # Настройка ЮKassa
+    YOOKASSA_SHOP_ID = os.environ.get('YOOKASSA_SHOP_ID')
+    YOOKASSA_SECRET_KEY = os.environ.get('YOOKASSA_SECRET_KEY')
+    
+    if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
+        Configuration.account_id = YOOKASSA_SHOP_ID
+        Configuration.secret_key = YOOKASSA_SECRET_KEY
+        print(f"✅ ЮKassa настроен")
+    
+    # Создание приложения
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler для покупки билетов
+    # ===== ConversationHandler для покупки билетов =====
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start_command)],
         states={
@@ -2484,46 +2753,93 @@ def main():
             CONFIRMING: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
             "PAYMENT": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_payment_step)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        allow_reentry=True
     )
     app.add_handler(conv_handler)
     
-    # Обработчик для фото мероприятий
-    app.add_handler(MessageHandler(
-        filters.PHOTO,
-        handle_photo_upload
-    ))
+    # ===== ОБРАБОТЧИКИ ФОТО =====
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo_upload))
     
-    # Основные команды
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("id", get_id))
-    app.add_handler(CommandHandler("events", events_command))
-    app.add_handler(CommandHandler("check", check_ticket_by_id))
-    app.add_handler(CommandHandler("check_qr", check_qr_command))
-    app.add_handler(CommandHandler("sync", sync_command))
-    app.add_handler(CommandHandler("rebuild", rebuild_command))
-    app.add_handler(CommandHandler("import", import_command))
+    # ===== ОСНОВНЫЕ КОМАНДЫ =====
+    basic_commands = [
+        ("admin", admin_command),
+        ("help", help_command),
+        ("id", get_id),
+        ("events", events_command),
+        ("check", check_ticket_command),
+        ("status", status_command),
+        ("test", test_command),
+    ]
     
-    # Обработчик для админ-панели
+    for cmd, handler in basic_commands:
+        app.add_handler(CommandHandler(cmd, handler))
+    
+    # ===== КОМАНДЫ ДЛЯ QR MAPPING =====
+    mapping_commands = [
+        ("show_payments", show_payments_command),
+        ("map_qr", map_qr_command),
+        ("show_mapping", show_mapping_command),
+        ("sync", sync_command),
+        ("rebuild", rebuild_command),
+    ]
+    
+    for cmd, handler in mapping_commands:
+        app.add_handler(CommandHandler(cmd, handler))
+    
+    # ===== ОБРАБОТЧИКИ СООБЩЕНИЙ =====
+    # Админ-панель
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         admin_handler
     ))
     
-    # Обработчик для проверки QR-кодов отправленных как текст (только для админов)
-    # Создаем фильтр для проверки админов
-    admin_filter = filters.User(user_id=admin_ids)
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & admin_filter,
-        handle_qr_message
-    ))
+    # Проверка QR-кодов отправленных как текст (только для админов)
+    admin_ids = get_admin_ids()
+    if admin_ids:
+        admin_filter = filters.User(user_id=admin_ids)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & admin_filter,
+            handle_qr_message
+        ))
     
-    # Обработчик ошибок
+    # ===== ОБРАБОТЧИК ОШИБОК =====
     app.add_error_handler(error_handler)
     
-    # Запускаем фоновую проверку pending платежей
-    asyncio.get_event_loop().create_task(check_pending_payments())
+    # ===== ФОНОВЫЕ ЗАДАЧИ =====
+    loop = asyncio.get_event_loop()
+    
+    # Проверка pending платежей
+    loop.create_task(check_pending_payments())
+    
+    # Периодическая синхронизация
+    async def periodic_sync():
+        """Периодическая синхронизация с ЮKassa"""
+        while True:
+            await asyncio.sleep(300)  # Каждые 5 минут
+            try:
+                if os.path.exists("all-payments.csv"):
+                    print("🔄 Автоматическая синхронизация...")
+                    await sync_yookassa_payments("all-payments.csv")
+            except Exception as e:
+                print(f"❌ Ошибка синхронизации: {e}")
+    
+    loop.create_task(periodic_sync())
+    
+    # ===== ЗАПУСК =====
+    print("=" * 40)
+    print("✅ БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
+    print(f"🤖 Токен: {'✅' if BOT_TOKEN else '❌'}")
+    print(f"📊 CSV файл: {'✅' if os.path.exists('all-payments.csv') else '❌'}")
+    print(f"🎭 Мероприятий: {len(EVENTS)}")
+    print(f"👑 Админов: {len(admin_ids)}")
+    print("=" * 40)
+    
+    # Запуск бота
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
     
     # Запускаем периодическую синхронизацию с ЮKassa
     async def periodic_sync():
@@ -2558,6 +2874,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
