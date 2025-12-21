@@ -306,6 +306,35 @@ async def send_ticket_after_payment(user_id, order_id):
     except Exception as e:
         print(f"❌ Ошибка отправки билета: {e}")
 
+async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Синхронизация с CSV ЮKassa"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    await update.message.reply_text("🔄 Начинаю синхронизацию с ЮKassa...")
+    
+    try:
+        # Ваша функция синхронизации
+        updates = await sync_yookassa_payments("all-payments.csv")
+        await update.message.reply_text(f"✅ Синхронизировано {updates} платежей")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка синхронизации: {e}")
+
+async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пересоздание базы из CSV"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    await update.message.reply_text("🔄 Пересоздаю базу из CSV ЮKassa...")
+    
+    try:
+        count = create_database_from_yookassa("all-payments.csv")
+        await update.message.reply_text(f"✅ База пересоздана! Добавлено {count} заказов")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
 def update_order_status(order_id, status):
     """Обновляет статус заказа в CSV"""
     try:
@@ -677,6 +706,28 @@ async def create_yookassa_payment(amount, description, order_id):
     except Exception as e:
         print(f"❌ Ошибка создания платежа: {e}")
         return None
+
+async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Импорт платежей из CSV"""
+    if not is_admin(update.message.from_user.id):
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    await update.message.reply_text("🔄 Импорт из CSV ЮKassa...")
+    
+    try:
+        count = import_from_yookassa_csv("all-payments.csv")
+        await update.message.reply_text(f"✅ Импортировано {count} платежей")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка импорта: {e}")
+
+async def handle_qr_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка QR-кода отправленного как сообщение"""
+    if not is_admin(update.message.from_user.id):
+        return
+    
+    qr_data = update.message.text.strip()
+    await check_ticket_by_id(update, context, qr_data)
 
 async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка платежа через ЮKassa"""
@@ -2529,6 +2580,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
