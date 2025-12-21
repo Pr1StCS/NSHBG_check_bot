@@ -73,67 +73,62 @@ import pandas as pd
 from datetime import datetime
 
 def check_ticket_via_yookassa(qr_data: str):
+def check_ticket_via_yookassa(qr_data: str):
     """
     Проверяет билет напрямую по CSV ЮKassa
-    QR может содержать разные данные - нужно искать разными способами
     """
     try:
-        # Загружаем CSV ЮKassa
         csv_path = "all-payments.csv"
         if not os.path.exists(csv_path):
             print(f"❌ Файл {csv_path} не найден")
             return False, None, "Файл с платежами не найден"
         
-        df = pd.read_csv(csv_path, encoding='utf-8-sig')
+        # Пробуем разные форматы поиска
+        search_results = []
         
-        # Способ 1: Ищем по номеру счета (скорее всего QR содержит это)
-        # Номер счета в CSV: "019b3fba-b5b6-794c-861c-623f2c8d4716"
-        for _, row in df.iterrows():
+        with open(csv_path, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            rows = list(reader)
+        
+        # Способ 0: Прямой поиск по всему файлу (для отладки)
+        print(f"🔍 Ищем QR: {qr_data}")
+        print(f"📊 Всего записей в CSV: {len(rows)}")
+        
+        # Выводим структуру CSV для отладки
+        if rows:
+            print(f"📋 Колонки в CSV: {list(rows[0].keys())}")
+        
+        # Способ 1: Ищем в колонке "Номер счёта"
+        for row in rows:
             invoice_number = str(row.get('Номер счёта', '')).strip()
             if invoice_number and invoice_number == qr_data:
                 return process_yookassa_row(row, "по номеру счета")
         
-        # Способ 2: Ищем по идентификатору платежа
-        for _, row in df.iterrows():
+        # Способ 2: Ищем в "Идентификатор платежа"
+        for row in rows:
             payment_id = str(row.get('Идентификатор платежа', '')).strip()
             if payment_id and payment_id == qr_data:
                 return process_yookassa_row(row, "по ID платежа")
         
-        # Способ 3: Ищем по короткому ID (первые 8 символов)
-        for _, row in df.iterrows():
-            payment_id = str(row.get('Идентификатор платежа', '')).strip()
-            if payment_id and len(payment_id) >= 8 and payment_id[:8] == qr_data:
-                return process_yookassa_row(row, "по короткому ID")
+        # Способ 3: Ищем по номеру карты (если в QR осталась часть номера)
+        for row in rows:
+            card_number = str(row.get('Номер карты плательщика', '')).strip().replace('|', '')
+            if card_number and card_number.endswith(qr_data[-4:]):
+                return process_yookassa_row(row, "по номеру карты")
         
-        # Способ 4: Ищем по RRN операции
-        for _, row in df.iterrows():
-            rrn = str(row.get('RRN операции', '')).strip()
-            if rrn and rrn == qr_data:
-                return process_yookassa_row(row, "по RRN операции")
+        # Способ 4: Пытаемся сопоставить по user_id (первая часть QR)
+        user_id_part = qr_data.split('_')[0] if '_' in qr_data else ''
         
-        # Способ 5: QR может содержать URL с параметром
-        if "start=check_" in qr_data:
-            # Извлекаем order_id из URL: https://t.me/bot?start=check_ORDER_ID
-            order_id = qr_data.split("start=check_")[-1].split('&')[0].split('?')[0]
-            print(f"🔍 Извлечен order_id из URL: {order_id}")
-            
-            # Пробуем найти в CSV разными способами
-            for _, row in df.iterrows():
-                # Проверяем разные поля
-                invoice_number = str(row.get('Номер счёта', '')).strip()
-                payment_id = str(row.get('Идентификатор платежа', '')).strip()
-                
-                if invoice_number and invoice_number == order_id:
-                    return process_yookassa_row(row, "из URL по номеру счета")
-                elif payment_id and payment_id == order_id:
-                    return process_yookassa_row(row, "из URL по ID платежа")
-                elif payment_id and len(payment_id) >= 8 and payment_id[:8] == order_id:
-                    return process_yookassa_row(row, "из URL по короткому ID")
+        # Так как user_id в CSV нет, пробуем найти платеж по другим признакам
+        # Например, можно создать mapping вручную
         
+        print(f"❌ QR '{qr_data}' не найден ни в одной колонке CSV")
         return False, None, "Билет не найден в базе ЮKassa"
         
     except Exception as e:
         print(f"❌ Ошибка проверки билета: {e}")
+        import traceback
+        traceback.print_exc()
         return False, None, f"Ошибка проверки: {str(e)}"
 
 def process_yookassa_row(row, found_by: str):
@@ -2580,6 +2575,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
