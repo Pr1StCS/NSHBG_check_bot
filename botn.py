@@ -2767,7 +2767,7 @@ def main():
         ("help", help_command),
         ("id", get_id),
         ("events", events_command),
-        ("check", check_ticket_command),
+        ("check", check_ticket_by_id),
         ("status", status_command),
         ("test", test_command),
     ]
@@ -2874,6 +2874,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
