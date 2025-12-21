@@ -2499,7 +2499,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CommandHandler("events", events_command))
-    app.add_handler(CommandHandler("check", check_ticket_id))
+    app.add_handler(CommandHandler("check", check_ticket_by_id))
     app.add_handler(CommandHandler("check_qr", check_qr_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("rebuild", rebuild_command))
@@ -2558,6 +2558,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
