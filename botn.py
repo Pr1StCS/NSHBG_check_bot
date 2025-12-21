@@ -2241,65 +2241,6 @@ async def check_ticket_command(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=ReplyKeyboardRemove()
     )
 
-async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка билета"""
-    ticket_code = update.message.text.strip()
-    
-    try:
-        with open(ORDERS_FILE, 'r', encoding='utf-8-sig') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-        
-        order_found = None
-        for order in orders:
-            if order['ID заказа'] == ticket_code:
-                order_found = order
-                break
-        
-        if not order_found:
-            await update.message.reply_text("❌ Билет не найден")
-            return
-        
-        status = order_found.get('Статус', 'active')
-        
-        if status == 'used':
-            await update.message.reply_text(
-                f"⚠️ *Билет уже использован!*\n\n"
-                f"🆔 ID: {ticket_code}\n"
-                f"👤 Покупатель: {order_found['Имя']}\n"
-                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
-                f"🎟️ Категория: {order_found['Категория']}\n"
-                f"🕒 Дата покупки: {order_found['Дата']}",
-            )
-        elif status == 'active':
-            await mark_ticket_as_used(ticket_code)
-            
-            await update.message.reply_text(
-                f"✅ *Билет подтвержден!*\n\n"
-                f"🆔 ID: {ticket_code}\n"
-                f"👤 Покупатель: {order_found['Имя']}\n"
-                f"🎭 Мероприятие: {order_found['Мероприятие']}\n"
-                f"🎟️ Категория: {order_found['Категория']}\n"
-                f"🔢 Количество: {order_found['Количество']} шт.\n"
-                f"💵 Сумма: {order_found['Сумма']} руб.\n\n"
-                f"✅ Билет отмечен как использованный",
-            )
-        else:
-            await update.message.reply_text(f"❌ Неизвестный статус билета: {status}")
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
-
-seek(0)
-                    dict_reader = csv.DictReader(file)
-                    
-                    for i, row in enumerate(dict_reader):
-                        # Преобразуем row в словарь если это не dict
-                        if not isinstance(row, dict):
-                            row_dict = {}
-                            for j, value in enumerate(row):
-                                if j < len(headers):
-
 async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
     """Проверка билета с корректным чтением CSV"""
     
@@ -2746,6 +2687,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
