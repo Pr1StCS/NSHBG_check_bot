@@ -2497,7 +2497,7 @@ def main():
     asyncio.get_event_loop().create_task(check_pending_payments())
     
     # Запускаем периодическую синхронизацию с ЮKassa
-async def periodic_sync():
+    async def periodic_sync():
         while True:
             await asyncio.sleep(300)  # Каждые 5 минут
             if os.path.exists("all-payments.csv"):
@@ -2529,6 +2529,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
