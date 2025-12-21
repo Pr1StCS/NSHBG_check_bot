@@ -2233,139 +2233,210 @@ async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
 
 async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
-    """Умная проверка без точного mapping"""
+    """Упрощенная проверка с отладкой"""
     
-    # Извлекаем информацию из QR
-    parts = qr_data.split('_')
-    if len(parts) != 2:
-        await update.message.reply_text("❌ Неверный формат QR-кода")
-        return ConversationHandler.END
+    print(f"🔍 Начало проверки QR: {qr_data}")
     
-    user_id = parts[0]
-    qr_timestamp = int(parts[1])  # Unix timestamp из QR
-    
-    print(f"🔍 QR анализ: user_id={user_id}, timestamp={qr_timestamp}")
-    
-    # Конвертируем timestamp в дату для поиска
-    from datetime import datetime
-    try:
-        qr_date = datetime.fromtimestamp(qr_timestamp)
-        qr_date_str = qr_date.strftime("%Y-%m-%d")
-        print(f"📅 Дата из QR: {qr_date_str}")
-    except:
-        qr_date_str = "unknown"
-    
-    # Ищем подходящие платежи в CSV
-    import csv
-    
+    # Проверяем доступность файла
     csv_path = "all-payments.csv"
     if not os.path.exists(csv_path):
+        print(f"❌ Файл не найден: {csv_path}")
         await update.message.reply_text("❌ Файл с платежами не найден")
         return ConversationHandler.END
     
-    possible_matches = []
+    print(f"✅ Файл найден, размер: {os.path.getsize(csv_path)} байт")
     
-    with open(csv_path, 'r', encoding='utf-8-sig') as file:
-        reader = csv.DictReader(file)
-        
-        for row in reader:
-            status = row.get('Статус платежа', '').strip()
-            if status != 'Оплачен':
-                continue
-            
-            amount = float(row.get('Сумма платежа', 0))
-            payment_date = row.get('Дата платежа', '').strip()
-            payment_id = row.get('Идентификатор платежа', '').strip()
-            
-            # Проверяем дату платежа
-            try:
-                pay_date_obj = datetime.strptime(payment_date, "%Y-%m-%d %H:%M:%S")
-                pay_date_only = pay_date_obj.strftime("%Y-%m-%d")
+    # Пробуем разные кодировки
+    encodings = ['utf-8-sig', 'utf-8', 'cp1251', 'windows-1251']
+    
+    all_payments = []
+    
+    for encoding in encodings:
+        try:
+            with open(csv_path, 'r', encoding=encoding) as file:
+                # Сначала читаем как текст чтобы понять структуру
+                first_lines = [file.readline() for _ in range(3)]
+                print(f"📄 Первые строки ({encoding}):")
+                for i, line in enumerate(first_lines):
+                    print(f"  {i+1}: {line[:100]}...")
                 
-                # Если дата из QR совпадает с датой платежа (плюс-минус 1 день)
-                if qr_date_str != "unknown":
-                    if pay_date_only == qr_date_str:
-                        match_score = 100
-                    else:
-                        # Разница в днях
-                        days_diff = abs((pay_date_obj.date() - qr_date.date()).days)
-                        match_score = max(0, 100 - days_diff * 20)
-                else:
-                    match_score = 50  # Неизвестная дата
+                # Возвращаемся к началу
+                file.seek(0)
+                
+                # Пробуем прочитать как CSV
+                import csv
+                reader = csv.reader(file)
+                headers = next(reader, None)
+                print(f"📋 Заголовки ({encoding}): {headers}")
+                
+                if headers:
+                    # Читаем все строки
+                    file.seek(0)
+                    dict_reader = csv.DictReader(file)
                     
-            except:
-                match_score = 30
-            
-            possible_matches.append({
-                'payment_id': payment_id,
-                'amount': amount,
-                'date': payment_date,
-                'score': match_score,
-                'row': row
-            })
+                    for i, row in enumerate(dict_reader):
+                        # Преобразуем row в словарь если это не dict
+                        if not isinstance(row, dict):
+                            row_dict = {}
+                            for j, value in enumerate(row):
+                                if j < len(headers):
+                                    row_dict[headers[j]] = value
+                        else:
+                            row_dict = row
+                        
+                        all_payments.append(row_dict)
+                        
+                        if i < 3:  # Показываем первые 3 платежа
+                            print(f"  Платеж {i+1}: {row_dict}")
+                    
+                    print(f"✅ Успешно прочитано {len(all_payments)} платежей")
+                    break  # Успешно прочитали
+                    
+        except Exception as e:
+            print(f"❌ Ошибка с кодировкой {encoding}: {e}")
+            continue
     
-    # Сортируем по score
-    possible_matches.sort(key=lambda x: x['score'], reverse=True)
-    
-    if not possible_matches:
-        await update.message.reply_text("❌ В базе нет оплаченных платежей")
+    if not all_payments:
+        await update.message.reply_text("❌ Не удалось прочитать файл с платежами")
         return ConversationHandler.END
     
-    # Берем лучший match
-    best_match = possible_matches[0]
+    # Анализируем структуру данных
+    print(f"📊 Всего записей: {len(all_payments)}")
     
-    # Определяем категорию по сумме
-    amount = best_match['amount']
-    if amount in [600, 700]:
-        category = "Стандарт"
-        quantity = 1
-    elif amount in [1200, 1400]:
-        category = "VIP"
-        quantity = 2
-    elif amount == 1800:
-        category = "Премиум"
-        quantity = 3
-    elif amount == 2400:
-        category = "Групповой"
-        quantity = 4
-    else:
-        category = f"{amount} руб."
-        quantity = 1
+    # Показываем какие статусы есть
+    statuses = {}
+    for payment in all_payments[:10]:  # Первые 10
+        # Пробуем разные возможные названия колонки статуса
+        status_keys = ['Статус платежа', 'Статус', 'status', 'Payment Status']
+        
+        for key in status_keys:
+            if key in payment and payment[key]:
+                status = payment[key].strip()
+                statuses[status] = statuses.get(status, 0) + 1
+                break
     
-    if best_match['score'] > 70:
-        # Хорошее совпадение
+    print(f"🎯 Найденные статусы: {statuses}")
+    
+    # Ищем оплаченные платежи
+    paid_payments = []
+    
+    for payment in all_payments:
+        # Проверяем все возможные названия для статуса
+        possible_status_keys = ['Статус платежа', 'Статус', 'status', 'Payment Status', 'Состояние']
+        
+        for key in possible_status_keys:
+            if key in payment:
+                status_value = str(payment[key]).strip().lower()
+                # Проверяем разные варианты написания "оплачен"
+                if any(paid_word in status_value for paid_word in ['оплачен', 'оплачено', 'успешно', 'succeeded', 'success']):
+                    paid_payments.append(payment)
+                    break
+        
+        # Если не нашли по статусу, проверяем сумму (если сумма > 0, считаем оплаченным)
+        if 'Сумма платежа' in payment and payment['Сумма платежа']:
+            try:
+                amount = float(payment['Сумма платежа'])
+                if amount > 0 and payment not in paid_payments:
+                    paid_payments.append(payment)
+            except:
+                pass
+    
+    print(f"💰 Найдено оплаченных платежей: {len(paid_payments)}")
+    
+    if not paid_payments:
+        # Показываем что есть в файле
+        sample_info = "Примеры записей в файле:\n"
+        for i, payment in enumerate(all_payments[:3]):
+            sample_info += f"\n{i+1}. "
+            for key, value in list(payment.items())[:3]:  # Первые 3 поля
+                sample_info += f"{key}: {value[:30]}... | "
+        
+        await update.message.reply_text(
+            f"❌ Не найдено оплаченных платежей\n\n"
+            f"📊 Всего записей: {len(all_payments)}\n"
+            f"{sample_info}"
+        )
+        return ConversationHandler.END
+    
+    # Теперь ищем по QR
+    print(f"🔍 Ищем QR '{qr_data}' в {len(paid_payments)} оплаченных платежах...")
+    
+    # Пробуем разные поля для поиска
+    found_payments = []
+    
+    for payment in paid_payments:
+        # Проверяем все текстовые поля
+        for key, value in payment.items():
+            if value and qr_data in str(value):
+                print(f"✅ Найдено в поле '{key}': {value}")
+                found_payments.append(payment)
+                break
+    
+    if found_payments:
+        # Берем первый найденный
+        payment = found_payments[0]
+        
+        # Получаем данные
+        amount = payment.get('Сумма платежа', 0)
+        date = payment.get('Дата платежа', 'Неизвестно')
+        payment_id = payment.get('Идентификатор платежа', 'Без ID')
+        
+        # Определяем категорию
+        try:
+            amount_num = float(amount)
+            if amount_num in [600, 700]:
+                category = "Стандарт"
+                quantity = 1
+            elif amount_num in [1200, 1400]:
+                category = "VIP"
+                quantity = 2
+            elif amount_num == 1800:
+                category = "Премиум"
+                quantity = 3
+            elif amount_num == 2400:
+                category = "Групповой"
+                quantity = 4
+            else:
+                category = f"{amount_num} руб."
+                quantity = 1
+        except:
+            category = "Неизвестно"
+            quantity = 1
+        
         response = f"""
-✅ *Вероятный билет найден!*
+✅ *Билет подтвержден!*
 
-🎭 Мероприятие: Отчётный концерт Не Школы Гитары и Барабанов
-🎟️ Категория: {category}
-🔢 Количество: {quantity} шт.
+🎭 Мероприятие: Отчётный концерт
 💵 Сумма: {amount} руб.
-📅 Дата платежа: {best_match['date']}
-🎯 Совпадение: {best_match['score']}%
+🎟️ Категория: {category}
+🔢 Билетов: {quantity}
+📅 Дата: {date}
+🆔 ID: {payment_id[:20]}...
         
-✅ Билет принят (автоматическое сопоставление)
+✅ Вход разрешен!
         """
+        
     else:
-        # Слабое совпадение, нужна ручная проверка
+        # QR не найден, показываем что есть
+        sample_payments = "\n".join([
+            f"• {p.get('Дата платежа', '??')} - {p.get('Сумма платежа', '??')} руб. - {p.get('Идентификатор платежа', '??')[:15]}..."
+            for p in paid_payments[:5]
+        ])
+        
         response = f"""
-⚠️ *Требуется проверка администратора*
+❌ *QR не найден в базе*
 
-QR: `{qr_data}`
+Ваш QR: `{qr_data}`
         
-📊 *Найденные платежи (по дате):*
-"""
+📊 *В базе есть платежи:*
+{sample_payments}
         
-        # Показываем топ-3 платежа
-        for i, match in enumerate(possible_matches[:3]):
-            response += f"\n{i+1}. {match['date']} - {match['amount']} руб. ({match['score']}%)"
+Всего оплаченных платежей: {len(paid_payments)}
         
-        response += f"""
-        
-**Что делать администратору:**
-1. Спросите у гостя сумму покупки
-2. Сравните с платежами выше
-3. Вручную разрешите вход
+**Возможные причины:**
+1. QR содержит старый ID
+2. Платеж не в базе
+3. Необходима ручная проверка
         """
     
     await update.message.reply_text(response, parse_mode='Markdown')
@@ -2663,6 +2734,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
