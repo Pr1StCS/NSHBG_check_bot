@@ -73,7 +73,6 @@ import pandas as pd
 from datetime import datetime
 
 def check_ticket_via_yookassa(qr_data: str):
-def check_ticket_via_yookassa(qr_data: str):
     """
     Проверяет билет напрямую по CSV ЮKassa
     """
@@ -2575,6 +2574,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
