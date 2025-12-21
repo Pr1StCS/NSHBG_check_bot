@@ -2232,51 +2232,140 @@ async def check_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при проверке билета: {e}")
 
-async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, order_id: str):
-    """Проверка билета по ID из QR-кода (работает с ЮKassa CSV)"""
-    print(f"🔍 Проверка билета по QR: {order_id}")
+async def check_ticket_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE, qr_data: str):
+    """Умная проверка без точного mapping"""
     
-    # Проверяем через CSV ЮKassa
-    success, ticket_info, message = check_ticket_via_yookassa(order_id)
+    # Извлекаем информацию из QR
+    parts = qr_data.split('_')
+    if len(parts) != 2:
+        await update.message.reply_text("❌ Неверный формат QR-кода")
+        return ConversationHandler.END
     
-    if success and ticket_info:
-        # Билет найден и оплачен
-        response = f"""
-✅ *Билет подтвержден!*
-
-🎭 Мероприятие: {ticket_info['event']}
-🎟️ Категория: {ticket_info['category']}
-🔢 Количество: {ticket_info['quantity']} шт.
-💵 Сумма: {ticket_info['amount']} руб.
-📅 Дата оплаты: {ticket_info['date']}
-🔑 Найден: {ticket_info['found_by']}
-🆔 ID платежа: {ticket_info['payment_id'][:12]}...
+    user_id = parts[0]
+    qr_timestamp = int(parts[1])  # Unix timestamp из QR
+    
+    print(f"🔍 QR анализ: user_id={user_id}, timestamp={qr_timestamp}")
+    
+    # Конвертируем timestamp в дату для поиска
+    from datetime import datetime
+    try:
+        qr_date = datetime.fromtimestamp(qr_timestamp)
+        qr_date_str = qr_date.strftime("%Y-%m-%d")
+        print(f"📅 Дата из QR: {qr_date_str}")
+    except:
+        qr_date_str = "unknown"
+    
+    # Ищем подходящие платежи в CSV
+    import csv
+    
+    csv_path = "all-payments.csv"
+    if not os.path.exists(csv_path):
+        await update.message.reply_text("❌ Файл с платежами не найден")
+        return ConversationHandler.END
+    
+    possible_matches = []
+    
+    with open(csv_path, 'r', encoding='utf-8-sig') as file:
+        reader = csv.DictReader(file)
         
-✅ Билет действителен!
+        for row in reader:
+            status = row.get('Статус платежа', '').strip()
+            if status != 'Оплачен':
+                continue
+            
+            amount = float(row.get('Сумма платежа', 0))
+            payment_date = row.get('Дата платежа', '').strip()
+            payment_id = row.get('Идентификатор платежа', '').strip()
+            
+            # Проверяем дату платежа
+            try:
+                pay_date_obj = datetime.strptime(payment_date, "%Y-%m-%d %H:%M:%S")
+                pay_date_only = pay_date_obj.strftime("%Y-%m-%d")
+                
+                # Если дата из QR совпадает с датой платежа (плюс-минус 1 день)
+                if qr_date_str != "unknown":
+                    if pay_date_only == qr_date_str:
+                        match_score = 100
+                    else:
+                        # Разница в днях
+                        days_diff = abs((pay_date_obj.date() - qr_date.date()).days)
+                        match_score = max(0, 100 - days_diff * 20)
+                else:
+                    match_score = 50  # Неизвестная дата
+                    
+            except:
+                match_score = 30
+            
+            possible_matches.append({
+                'payment_id': payment_id,
+                'amount': amount,
+                'date': payment_date,
+                'score': match_score,
+                'row': row
+            })
+    
+    # Сортируем по score
+    possible_matches.sort(key=lambda x: x['score'], reverse=True)
+    
+    if not possible_matches:
+        await update.message.reply_text("❌ В базе нет оплаченных платежей")
+        return ConversationHandler.END
+    
+    # Берем лучший match
+    best_match = possible_matches[0]
+    
+    # Определяем категорию по сумме
+    amount = best_match['amount']
+    if amount in [600, 700]:
+        category = "Стандарт"
+        quantity = 1
+    elif amount in [1200, 1400]:
+        category = "VIP"
+        quantity = 2
+    elif amount == 1800:
+        category = "Премиум"
+        quantity = 3
+    elif amount == 2400:
+        category = "Групповой"
+        quantity = 4
+    else:
+        category = f"{amount} руб."
+        quantity = 1
+    
+    if best_match['score'] > 70:
+        # Хорошее совпадение
+        response = f"""
+✅ *Вероятный билет найден!*
+
+🎭 Мероприятие: Отчётный концерт Не Школы Гитары и Барабанов
+🎟️ Категория: {category}
+🔢 Количество: {quantity} шт.
+💵 Сумма: {amount} руб.
+📅 Дата платежа: {best_match['date']}
+🎯 Совпадение: {best_match['score']}%
+        
+✅ Билет принят (автоматическое сопоставление)
         """
-        
-        # Помечаем как использованный в локальной базе (если она есть)
-        await mark_ticket_as_used_in_local(order_id, ticket_info)
-        
-    elif ticket_info:  # Найден но не оплачен
+    else:
+        # Слабое совпадение, нужна ручная проверка
         response = f"""
-❌ *Платеж не завершен*
+⚠️ *Требуется проверка администратора*
 
-🎭 Мероприятие: {ticket_info['event']}
-💵 Сумма: {ticket_info['amount']} руб.
-📅 Дата: {ticket_info['date']}
-⚠️ Статус: {ticket_info['status']}
+QR: `{qr_data}`
         
-❌ Билет недействителен - платеж не завершен.
-        """
-    else:  # Не найден
-        response = f"""
-❌ *Билет не найден*
-
-QR-код: `{order_id}`
+📊 *Найденные платежи (по дате):*
+"""
         
-Проверьте правильность QR-кода.
-Если проблема сохраняется, обратитесь к администратору.
+        # Показываем топ-3 платежа
+        for i, match in enumerate(possible_matches[:3]):
+            response += f"\n{i+1}. {match['date']} - {match['amount']} руб. ({match['score']}%)"
+        
+        response += f"""
+        
+**Что делать администратору:**
+1. Спросите у гостя сумму покупки
+2. Сравните с платежами выше
+3. Вручную разрешите вход
         """
     
     await update.message.reply_text(response, parse_mode='Markdown')
@@ -2574,6 +2663,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
 
     main()
+
 
 
 
